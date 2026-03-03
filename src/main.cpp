@@ -2,6 +2,7 @@
 #include <print>
 
 #include "seam.h"
+#include "blend.h"
 
 int main() {
     cv::Mat img1 = cv::imread("test-data/p1.tif", cv::IMREAD_UNCHANGED);
@@ -37,6 +38,12 @@ int main() {
     const cv::Mat mask = seam::findSeam(f1, f2, err);
     if (!cv::imwrite("test-data/seam.tif", mask, tiff_params)) {
         std::println(stderr, "Failed to write test-data/seam.tif");
+        return 1;
+    }
+
+    const cv::Mat blended = blend::multiBandBlend(f1, f2, mask);
+    if (!cv::imwrite("test-data/blend.tif", blended, tiff_params)) {
+        std::println(stderr, "Failed to write test-data/blend.tif");
         return 1;
     }
 
