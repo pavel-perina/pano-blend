@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc imgcodecs)
 
-add_executable(blend src/main.cpp src/colors.cpp)
+add_executable(blend src/main.cpp src/colors.cpp src/seam.cpp)
 target_include_directories(blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
 target_link_libraries(blend PRIVATE ${OpenCV_LIBS})
 
