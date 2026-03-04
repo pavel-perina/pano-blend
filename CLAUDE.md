@@ -47,11 +47,32 @@ tests/test_input.cpp        — GTest: validates p1.tif / p2.tif pixel values
 - `cv::detail::GCGraph` is in `<opencv2/imgproc/detail/gcgraph.hpp>`
 - `cv::detail::MultiBandBlender` needs `find_package(OpenCV … stitching)`
 
-## What's next (SmartBlend parity)
-1. **High-pass delta** — SmartBlend uses Gaussian-blurred colour difference as seam
-   cost (HiPassLevel=4), not raw OKLab distance. Seam prefers flat zones, avoids edges.
-2. **RE: `seekTo` (0x407c10)** — likely contains subpixel / pyramid-with-alpha blend
-3. **RE: outer loop (0x405520)** — per-row pixel write-back after seam
+## What's next
+
+### SmartBlend parity
+1. **Distance error terms (DER/DEC)** — SmartBlend adds a distance-based cost to the
+   seam n-weights: `-DER 0.25` (relative) and `-DEC 0.094` (constant). Likely
+   implemented in `ComputeDirectPixelError` (0x4076b0). Probably distance from image
+   boundary or overlap centre, biasing the seam toward the middle of the overlap.
+2. **High-pass delta** — `-HiPassLevel 4` means sigma = overlapWidth/16 Gaussian blur
+   on the colour difference before squaring. **Do not implement without RE confirmation
+   of exact formula** — naive high-pass on raw ΔE made results worse (see git history).
+3. **RE: `seekTo` (0x407c10)** — likely contains the delta channel computation.
+4. **RE: `compositeBlend` (vtable[13])** — final pixel write-back / alpha handling.
+
+### CLI / usability
+- **Enblend-compatible CLI**: `blend img1 [-xoff N] img2 [-xoff N] img3 ... -o out.tif`
+  - Positional args = input files; `-xoff`/`-yoff` follow each image
+  - `-o` output file
+  - `-w`, `-v` accepted and ignored (enblend compat)
+  - `-SeamVerbose` → write error.tif / seam_viz.tif (already done internally)
+  - `-MinSize` → num pyramid bands (currently hardcoded 5)
+- **TIFF position tags** as alternative to `-xoff`/`-yoff`:
+  - `TIFFTAG_XPOSITION` (286) / `TIFFTAG_YPOSITION` (287) — pixel offset in canvas
+  - `TIFFTAG_PIXAR_IMAGEFULLWIDTH` (33300) / `TIFFTAG_PIXAR_IMAGEFULLLENGTH` (33301)
+  - Written by Hugin/PTStitch; xposition_pixels = XPOSITION / XRESOLUTION
+- **Exposure/colour correction** — `cv::detail::GainCompensator` (already linked via
+  stitching module). Run before `computeError` on the overlap region.
 
 ## SmartBlend formula (Norel 2011)
 > psychovisual error + Kolmogorov min-cut + ENBLEND + subpixel accuracy + pyramid with alpha
