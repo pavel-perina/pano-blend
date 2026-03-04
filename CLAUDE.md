@@ -74,5 +74,22 @@ tests/test_input.cpp        — GTest: validates p1.tif / p2.tif pixel values
 - **Exposure/colour correction** — `cv::detail::GainCompensator` (already linked via
   stitching module). Run before `computeError` on the overlap region.
 
+## Future / TODO
+
+### Grayscale + 16-bit support (SEM images)
+Goal: reuse the same pipeline for scanning electron microscope (SEM) images,
+which are grayscale and typically 16-bit per channel.
+
+- **Grayscale input**: pipeline currently assumes BGRA float. Need to handle
+  CV_16UC1 (gray) and CV_16UC2 (gray+alpha) on load, convert to float internally.
+- **16-bit**: `imread(IMREAD_UNCHANGED)` loads 16-bit correctly; `convertTo(CV_32F,
+  1.0/65535.0)` for normalisation. OKLab conversion assumes sRGB input — for SEM
+  (linear, no colour) just use L channel directly (skip a/b, use intensity diff).
+- **Gray+alpha TIFF**: OpenCV `imwrite` hard-rejects 2-channel images (assertion:
+  channels must be 1, 3, or 4). Writing gray+alpha requires libtiff directly
+  (already linked via tag_tiff). Alternatively store as 4-channel with R=G=B=gray.
+- **MultiBandBlender**: accepts CV_16SC3 — for grayscale replicate the single channel
+  3× before feeding, or investigate whether CV_16SC1 works.
+
 ## SmartBlend formula (Norel 2011)
 > psychovisual error + Kolmogorov min-cut + ENBLEND + subpixel accuracy + pyramid with alpha
