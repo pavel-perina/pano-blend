@@ -1,6 +1,7 @@
 #include "seam.h"
 #include "colors.h"
 
+#include <opencv2/imgproc.hpp>
 #include <opencv2/imgproc/detail/gcgraph.hpp>
 #include <cmath>
 #include <print>
@@ -57,7 +58,6 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
     }
 
     if (ox0 >= ox1 || oy0 >= oy1) {
-        // No overlap — seam at left edge, full image1
         return cv::Mat::zeros(H, W, CV_8UC1);
     }
 
@@ -71,6 +71,44 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
     const int ch = oy1 - oy0;
     std::println("  Overlap crop: {}x{} at ({},{}) [canvas {}x{}]", cw, ch, ox0, oy0, W, H);
 
+    // --- Distance-based T-weights for overlap pixels (analogous to SmartBlend's DER/DEC) ---
+    //
+    // SmartBlend assigns small terminal weights to overlap pixels based on their
+    // distance from the img1/img2 coverage boundaries.  Pixels close to img1
+    // territory get a small positive T-weight (source bias) and vice versa.
+    // This seeds overlap pixels directly into BK trees, so no kHard N-weight
+    // edges at the overlap boundary are needed — the total flow is then bounded
+    // by the N-weight capacities, making BK very fast.
+    //
+    // kBias: T-weight per pixel of distance difference (img1 vs img2 boundary).
+    // Must be much smaller than typical N-weight so N-weights dominate seam choice.
+    constexpr float kBias = 1e-4f;
+
+    // Build single-image masks over the crop
+    cv::Mat mask_in1(ch, cw, CV_8U, cv::Scalar(0));
+    cv::Mat mask_in2(ch, cw, CV_8U, cv::Scalar(0));
+    for (int cy = 0; cy < ch; ++cy) {
+        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(cy + oy0);
+        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(cy + oy0);
+        uint8_t* m1 = mask_in1.ptr<uint8_t>(cy);
+        uint8_t* m2 = mask_in2.ptr<uint8_t>(cy);
+        for (int cx = 0; cx < cw; ++cx) {
+            const int x = cx + ox0;
+            const bool in1 = r1[x][3] > 0.5f;
+            const bool in2 = r2[x][3] > 0.5f;
+            m1[cx] = (in1 && !in2) ? 255 : 0;
+            m2[cx] = (!in1 && in2) ? 255 : 0;
+        }
+    }
+
+    // dist1f[cy][cx] = distance (pixels) from (cx,cy) to nearest img1-only pixel
+    // dist2f[cy][cx] = distance (pixels) from (cx,cy) to nearest img2-only pixel
+    // distanceTransform computes: for each non-zero pixel, distance to nearest zero.
+    // Input  = 255 - mask  → zeros mark the region we want distance FROM.
+    cv::Mat dist1f, dist2f;
+    cv::distanceTransform(255 - mask_in1, dist1f, cv::DIST_L2, cv::DIST_MASK_PRECISE);
+    cv::distanceTransform(255 - mask_in2, dist2f, cv::DIST_L2, cv::DIST_MASK_PRECISE);
+
     // --- Build BK graph on the crop ---
     cv::detail::GCGraph<float> graph;
     graph.create(ch * cw, 4 * ch * cw);
@@ -83,6 +121,8 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
         const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(y);
         const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(y);
         const float*     re = err.ptr<float>(y);
+        const float*     d1 = dist1f.ptr<float>(cy);
+        const float*     d2 = dist2f.ptr<float>(cy);
 
         for (int cx = 0; cx < cw; ++cx) {
             const int x       = cx + ox0;
@@ -91,26 +131,35 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
             const bool in2    = r2[x][3] > 0.5f;
             const bool overlap = in1 && in2;
 
-            if (in1 && !in2)
+            // T-weight: positive = source (img1 side), negative = sink (img2 side)
+            if (in1 && !in2) {
                 graph.addTermWeights(idx, kHard, 0.0f);
-            else if (!in1 && in2)
+            } else if (!in1 && in2) {
                 graph.addTermWeights(idx, 0.0f, kHard);
+            } else if (overlap) {
+                // Distance-based bias: positive near img1 boundary, negative near img2
+                const float tw = kBias * (d2[cx] - d1[cx]);
+                if      (tw > 0.0f) graph.addTermWeights(idx, tw, 0.0f);
+                else if (tw < 0.0f) graph.addTermWeights(idx, 0.0f, -tw);
+                // tw == 0 (equidistant): free node, assigned by cut structure
+            }
+            // else: outside both images → free node, irrelevant to seam
 
-            const float eu = overlap ? re[x] : 0.0f;
+            // N-weights: only between doubly-covered (overlap) pixels.
+            // No kHard edges at the overlap boundary — single-image pixels are
+            // hard-pinned by their T-weights, so the cut stays inside the overlap.
+            if (!overlap) continue;
+
+            const float eu = re[x];
 
             // Right neighbour
             if (cx + 1 < cw) {
-                const int nx  = x + 1;
-                const int nidx = idx + 1;
-                const bool n1 = r1[nx][3] > 0.5f;
-                const bool n2 = r2[nx][3] > 0.5f;
-                const bool n_overlap = n1 && n2;
-                if (overlap || n_overlap) {
-                    if ((in1 || in2) && (n1 || n2)) {
-                        const float ev  = n_overlap ? re[nx] : 0.0f;
-                        const float cap = (overlap && n_overlap) ? eu*eu + ev*ev : kHard;
-                        graph.addEdges(idx, nidx, cap, cap);
-                    }
+                const bool n_in1 = r1[x+1][3] > 0.5f;
+                const bool n_in2 = r2[x+1][3] > 0.5f;
+                if (n_in1 && n_in2) {
+                    const float ev  = re[x + 1];
+                    const float cap = eu*eu + ev*ev;
+                    graph.addEdges(idx, idx + 1, cap, cap);
                 }
             }
 
@@ -120,16 +169,12 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
                 const int nidx = idx + cw;
                 const cv::Vec4f* nr1 = f1.ptr<cv::Vec4f>(ny);
                 const cv::Vec4f* nr2 = f2.ptr<cv::Vec4f>(ny);
-                const float*     nre = err.ptr<float>(ny);
-                const bool n1 = nr1[x][3] > 0.5f;
-                const bool n2 = nr2[x][3] > 0.5f;
-                const bool n_overlap = n1 && n2;
-                if (overlap || n_overlap) {
-                    if ((in1 || in2) && (n1 || n2)) {
-                        const float ev  = n_overlap ? nre[x] : 0.0f;
-                        const float cap = (overlap && n_overlap) ? eu*eu + ev*ev : kHard;
-                        graph.addEdges(idx, nidx, cap, cap);
-                    }
+                const bool n_in1 = nr1[x][3] > 0.5f;
+                const bool n_in2 = nr2[x][3] > 0.5f;
+                if (n_in1 && n_in2) {
+                    const float ev  = err.ptr<float>(ny)[x];
+                    const float cap = eu*eu + ev*ev;
+                    graph.addEdges(idx, nidx, cap, cap);
                 }
             }
         }
@@ -149,7 +194,6 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
             if (in_crop_y && x >= ox0 && x < ox1) {
                 rm[x] = graph.inSourceSegment((y - oy0) * cw + (x - ox0)) ? 0 : 255;
             } else {
-                // Outside crop: all single-image pixels
                 rm[x] = (r2[x][3] > 0.5f && r1[x][3] <= 0.5f) ? 255 : 0;
             }
         }
