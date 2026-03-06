@@ -1,4 +1,6 @@
 build
 .cache
 perf.data*
+CMakeUserPresets.json
+*.bak
 
