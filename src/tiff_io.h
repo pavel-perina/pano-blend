@@ -31,8 +31,9 @@ cv::Size canvasSize(const std::vector<TiffImage>& images);
 // Returns CV_32FC4.
 cv::Mat placeOnCanvas(const TiffImage& img, cv::Size canvas);
 
-// Write a mat to a TIFF file via OpenCV (BGRA, uncompressed).
-// Accepts CV_8UC4 or CV_32FC4 (auto-converted to 8-bit for writing).
-void writeTiff(const std::string& path, const cv::Mat& mat);
+// Write a mat to a TIFF file (Deflate compressed, alpha-tagged).
+// Accepts CV_8UC1/3/4 or CV_32FC1/3/4 (auto-converted to 8-bit).
+// compression: 1=fastest … 9=smallest (zlib level, default 6).
+void writeTiff(const std::string& path, const cv::Mat& mat, int compression = 6);
 
 } // namespace tiffio

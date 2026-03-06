@@ -157,10 +157,10 @@ int main(int argc, char** argv) {
 
     if (opts.seam_verbose) {
         t0 = ms();
-        tiffio::writeTiff("error.tif",   err);
-        tiffio::writeTiff("seam.tif",    mask);
+        tiffio::writeTiff("error.tif",    err,  9);
+        tiffio::writeTiff("seam.tif",     mask, 9);
         const cv::Mat viz = seam::visualizeSeam(f1, f2, err, mask);
-        tiffio::writeTiff("seam_viz.tif", viz);
+        tiffio::writeTiff("seam_viz.tif", viz,  9);
         std::println("  seam verbose: {:6} ms  (error.tif, seam.tif, seam_viz.tif)", ms() - t0);
     }
 

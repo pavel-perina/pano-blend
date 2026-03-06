@@ -1,6 +1,6 @@
 #include "tiff_io.h"
 
-#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 #include <tiffio.h>
 #include <cmath>
 #include <format>
@@ -118,15 +118,45 @@ cv::Mat placeOnCanvas(const TiffImage& img, cv::Size canvas) {
     return result;
 }
 
-void writeTiff(const std::string& path, const cv::Mat& mat) {
-    cv::Mat out;
+void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
+    // Convert to 8-bit
+    cv::Mat u8;
     if (mat.depth() == CV_32F)
-        mat.convertTo(out, CV_8UC4, 255.0);
+        mat.convertTo(u8, CV_8U, 255.0);
     else
-        out = mat;
-    const std::vector<int> params = { cv::IMWRITE_TIFF_COMPRESSION, 1 };
-    if (!cv::imwrite(path, out, params))
+        u8 = mat;
+
+    const int ch = u8.channels();
+
+    // OpenCV stores color as BGR(A); TIFF expects RGB(A) — swap for multi-channel.
+    if (ch == 4)
+        cv::cvtColor(u8, u8, cv::COLOR_BGRA2RGBA);
+    else if (ch == 3)
+        cv::cvtColor(u8, u8, cv::COLOR_BGR2RGB);
+
+    TIFF* tif = TIFFOpen(path.c_str(), "w");
+    if (!tif)
         throw std::runtime_error("Cannot write: " + path);
+
+    TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      static_cast<uint32_t>(u8.cols));
+    TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     static_cast<uint32_t>(u8.rows));
+    TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(ch));
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(8));
+    TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     ch >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK);
+    TIFFSetField(tif, TIFFTAG_COMPRESSION,     COMPRESSION_ADOBE_DEFLATE);
+    TIFFSetField(tif, TIFFTAG_ZIPQUALITY,      compression);
+    TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
+    TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    TIFFDefaultStripSize(tif, 0));
+
+    if (ch == 4) {
+        uint16_t extra[] = { EXTRASAMPLE_UNASSALPHA };
+        TIFFSetField(tif, TIFFTAG_EXTRASAMPLES, 1, extra);
+    }
+
+    for (int y = 0; y < u8.rows; ++y)
+        TIFFWriteScanline(tif, u8.ptr(y), static_cast<uint32_t>(y));
+
+    TIFFClose(tif);
 }
 
 } // namespace tiffio
