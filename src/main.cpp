@@ -241,8 +241,9 @@ int main(int argc, char** argv) {
         std::println("  Seam {}-{}:", pair.i, pair.j);
 
         t0 = ms();
-        const cv::Mat err = seam::computeError(canvas_images[pair.i], canvas_images[pair.j]);
-        std::println("    computeError: {:6} ms", ms() - t0);
+        const bool gray = images[pair.i].grayscale && images[pair.j].grayscale;
+        const cv::Mat err = seam::computeError(canvas_images[pair.i], canvas_images[pair.j], gray);
+        std::println("    computeError: {:6} ms{}", ms() - t0, gray ? "  (grayscale)" : "");
 
         t0 = ms();
         seam_masks[p] = seam::findSeam(canvas_images[pair.i], canvas_images[pair.j], err);

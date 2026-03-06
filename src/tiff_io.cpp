@@ -28,35 +28,33 @@ TiffImage readTiff(const std::string& path, int xoff, int yoff) {
 
     registerPixarTags(tif);
 
-    // --- Format check: only 8-bit RGB and RGBA are implemented ---
-    uint16_t spp = 1, bps = 8, photo = PHOTOMETRIC_RGB;
+    uint32_t w = 0, h = 0;
+    uint16_t spp = 1, bps = 8, photo = PHOTOMETRIC_MINISBLACK;
+    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH,      &w);
+    TIFFGetField(tif, TIFFTAG_IMAGELENGTH,     &h);
     TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &spp);
     TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE,   &bps);
     TIFFGetField(tif, TIFFTAG_PHOTOMETRIC,     &photo);
 
-    if (bps != 8) {
+    if (bps != 8 && bps != 16) {
         TIFFClose(tif);
         throw std::runtime_error(std::format(
-            "Not implemented: '{}' is {}-bit (only 8-bit supported)", path, bps));
-    }
-    if (photo != PHOTOMETRIC_RGB) {
-        TIFFClose(tif);
-        throw std::runtime_error(std::format(
-            "Not implemented: '{}' photometric={} (only RGB/RGBA supported)",
-            path, photo));
-    }
-    if (spp != 3 && spp != 4) {
-        TIFFClose(tif);
-        throw std::runtime_error(std::format(
-            "Not implemented: '{}' has {} samples/pixel (only 3 or 4 supported)",
-            path, spp));
+            "'{}': {}-bit not supported (only 8 and 16)", path, bps));
     }
 
-    uint32_t w = 0, h = 0;
-    TIFFGetField(tif, TIFFTAG_IMAGEWIDTH,  &w);
-    TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h);
+    const bool is_gray = (photo == PHOTOMETRIC_MINISBLACK || photo == PHOTOMETRIC_MINISWHITE);
+    const bool is_rgb  = (photo == PHOTOMETRIC_RGB);
+    if (!is_gray && !is_rgb) {
+        TIFFClose(tif);
+        throw std::runtime_error(std::format(
+            "'{}': photometric {} not supported", path, photo));
+    }
 
-    // --- Position tags ---
+    // Determine if there's an alpha channel
+    const bool has_alpha = (is_gray && spp >= 2) || (is_rgb && spp >= 4);
+    const float scale = (bps == 16) ? 1.0f / 65535.0f : 1.0f / 255.0f;
+
+    // Position tags
     float    tx = 0.0f, ty = 0.0f, xres = 1.0f, yres = 1.0f;
     uint32_t canvas_w = 0, canvas_h = 0;
     TIFFGetField(tif, TIFFTAG_XPOSITION,   &tx);
@@ -66,36 +64,70 @@ TiffImage readTiff(const std::string& path, int xoff, int yoff) {
     TIFFGetField(tif, 33300, &canvas_w);
     TIFFGetField(tif, 33301, &canvas_h);
 
-    // --- Read pixels via TIFFReadRGBAImage ---
-    // Always returns RGBA uint8, bottom-to-top row order.
-    std::vector<uint32_t> raster(w * h);
-    if (!TIFFReadRGBAImage(tif, w, h, raster.data(), /*stop_on_error=*/0)) {
-        TIFFClose(tif);
-        throw std::runtime_error("TIFFReadRGBAImage failed: " + path);
-    }
-    TIFFClose(tif);
+    // Read scanlines
+    const tmsize_t scanline_size = TIFFScanlineSize(tif);
+    std::vector<uint8_t> buf(static_cast<size_t>(scanline_size));
 
-    // Convert: RGBA uint8 bottom-to-top → CV_32FC4 BGRA float [0,1] top-to-bottom
     cv::Mat mat(static_cast<int>(h), static_cast<int>(w), CV_32FC4);
+
     for (uint32_t y = 0; y < h; ++y) {
-        for (uint32_t x = 0; x < w; ++x) {
-            const uint32_t p = raster[(h - 1 - y) * w + x];  // flip vertical
-            mat.at<cv::Vec4f>(y, x) = {
-                TIFFGetB(p) / 255.0f,
-                TIFFGetG(p) / 255.0f,
-                TIFFGetR(p) / 255.0f,
-                TIFFGetA(p) / 255.0f,
-            };
+        TIFFReadScanline(tif, buf.data(), y);
+        cv::Vec4f* row = mat.ptr<cv::Vec4f>(static_cast<int>(y));
+
+        if (is_gray && bps == 8) {
+            const uint8_t* src = buf.data();
+            for (uint32_t x = 0; x < w; ++x) {
+                const float g = src[x * spp] * scale;
+                const float a = has_alpha ? src[x * spp + 1] * scale : 1.0f;
+                row[x] = {g, g, g, a};  // BGRA with B=G=R=gray
+            }
+        } else if (is_gray && bps == 16) {
+            const uint16_t* src = reinterpret_cast<const uint16_t*>(buf.data());
+            for (uint32_t x = 0; x < w; ++x) {
+                const float g = src[x * spp] * scale;
+                const float a = has_alpha ? src[x * spp + 1] * scale : 1.0f;
+                row[x] = {g, g, g, a};
+            }
+        } else if (is_rgb && bps == 8) {
+            const uint8_t* src = buf.data();
+            for (uint32_t x = 0; x < w; ++x) {
+                const float r = src[x * spp + 0] * scale;
+                const float g = src[x * spp + 1] * scale;
+                const float b = src[x * spp + 2] * scale;
+                const float a = has_alpha ? src[x * spp + 3] * scale : 1.0f;
+                row[x] = {b, g, r, a};  // BGRA
+            }
+        } else if (is_rgb && bps == 16) {
+            const uint16_t* src = reinterpret_cast<const uint16_t*>(buf.data());
+            for (uint32_t x = 0; x < w; ++x) {
+                const float r = src[x * spp + 0] * scale;
+                const float g = src[x * spp + 1] * scale;
+                const float b = src[x * spp + 2] * scale;
+                const float a = has_alpha ? src[x * spp + 3] * scale : 1.0f;
+                row[x] = {b, g, r, a};
+            }
+        }
+
+        // MINISWHITE: invert gray values (alpha stays)
+        if (photo == PHOTOMETRIC_MINISWHITE) {
+            for (uint32_t x = 0; x < w; ++x) {
+                row[x][0] = 1.0f - row[x][0];
+                row[x][1] = 1.0f - row[x][1];
+                row[x][2] = 1.0f - row[x][2];
+            }
         }
     }
 
+    TIFFClose(tif);
+
     TiffImage result;
-    result.mat      = std::move(mat);
-    result.x        = (xoff >= 0) ? xoff : static_cast<int>(std::round(tx * xres));
-    result.y        = (yoff >= 0) ? yoff : static_cast<int>(std::round(ty * yres));
-    result.canvas_w = static_cast<int>(canvas_w);
-    result.canvas_h = static_cast<int>(canvas_h);
-    result.path     = path;
+    result.mat       = std::move(mat);
+    result.x         = (xoff >= 0) ? xoff : static_cast<int>(std::round(tx * xres));
+    result.y         = (yoff >= 0) ? yoff : static_cast<int>(std::round(ty * yres));
+    result.canvas_w  = static_cast<int>(canvas_w);
+    result.canvas_h  = static_cast<int>(canvas_h);
+    result.grayscale = is_gray;
+    result.path      = path;
     return result;
 }
 
@@ -148,7 +180,7 @@ void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    TIFFDefaultStripSize(tif, 0));
 
-    if (ch == 4) {
+    if (ch == 4 || ch == 2) {
         uint16_t extra[] = { EXTRASAMPLE_UNASSALPHA };
         TIFFSetField(tif, TIFFTAG_EXTRASAMPLES, 1, extra);
     }

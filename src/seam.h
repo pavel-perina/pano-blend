@@ -4,9 +4,10 @@
 
 namespace seam {
 
-// Per-pixel OKLab distance between two float BGRA images (CV_32FC4).
+// Per-pixel distance between two float BGRA images (CV_32FC4).
+// Color images: OKLab perceptual distance. Grayscale: absolute intensity diff.
 // Pixels not covered by both images are filled with a large sentinel value.
-cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2);
+cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2, bool grayscale = false);
 
 // Boykov-Kolmogorov graph-cut seam.
 // Returns CV_8UC1 mask: 0 = image1 (source side), 255 = image2 (sink side).

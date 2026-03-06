@@ -12,7 +12,7 @@ namespace seam {
 // OKLab distance, safe for downstream squaring in n-weight computation.
 static constexpr float kNoOverlap = 1e6f;
 
-cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2) {
+cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2, bool grayscale) {
     const int h = f1.rows;
     const int w = f1.cols;
     cv::Mat err(h, w, CV_32FC1);
@@ -26,13 +26,19 @@ cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2) {
                 re[x] = kNoOverlap;
                 continue;
             }
-            // OpenCV BGRA: [0]=B [1]=G [2]=R [3]=A
-            const auto lab1 = color::okLabFromRgb({r1[x][2], r1[x][1], r1[x][0]});
-            const auto lab2 = color::okLabFromRgb({r2[x][2], r2[x][1], r2[x][0]});
-            const float dL = lab1.L - lab2.L;
-            const float da = lab1.a - lab2.a;
-            const float db = lab1.b - lab2.b;
-            re[x] = std::sqrt(dL*dL + da*da + db*db);
+            if (grayscale) {
+                // R=G=B=gray internally, just compare one channel
+                re[x] = std::abs(r1[x][0] - r2[x][0]);
+            } else {
+                // OKLab perceptual distance for color images
+                // OpenCV BGRA: [0]=B [1]=G [2]=R [3]=A
+                const auto lab1 = color::okLabFromRgb({r1[x][2], r1[x][1], r1[x][0]});
+                const auto lab2 = color::okLabFromRgb({r2[x][2], r2[x][1], r2[x][0]});
+                const float dL = lab1.L - lab2.L;
+                const float da = lab1.a - lab2.a;
+                const float db = lab1.b - lab2.b;
+                re[x] = std::sqrt(dL*dL + da*da + db*db);
+            }
         }
     }
     return err;

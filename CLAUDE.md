@@ -1,9 +1,10 @@
 # pano-blend — Project Context
 
 ## What this is
-C++23 / OpenCV panoramic image stitcher, progressively reconstructing the algorithm
-of SmartBlend (Michael Norel, 2007). Reference binary + RE docs live at
-`/mnt/c/dev-c/blend/smartblend/` (Windows FS — do not move).
+C++23 / OpenCV panoramic image blender. Finds optimal seams via Boykov-Kolmogorov
+graph-cut, then composites using Laplacian pyramid (multi-band) blending.
+Supports N images. Algorithm reconstructed from SmartBlend (Michael Norel, 2007).
+RE docs: `/mnt/c/dev-c/blend/smartblend/` (Windows FS — read-only reference).
 
 ## Environment
 - OS: openSUSE Leap 16.0 in WSL2
@@ -15,81 +16,81 @@ of SmartBlend (Michael Norel, 2007). Reference binary + RE docs live at
 cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release \
       -DOpenCV_DIR=/usr/lib64/cmake/opencv4
 cmake --build build --parallel
-./build/blend          # writes test-data/*.tif
 ctest --test-dir build # runs GTest suite
 ```
 
-## Pipeline (all implemented)
-| Step | Function | Output |
+## CLI
+```
+blend img1.tif img2.tif [img3.tif ...] -o out.tif
+blend img1.tif img2.tif -SeamMaskOnly mask.tif   # label map only, no blending
+blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
+```
+- Image positions read from TIFF tags (XPOSITION/YPOSITION), or `-xoff`/`-yoff`
+- `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit
+- `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images)
+- `-w`, `-v` accepted and ignored (enblend compat)
+- SmartBlend flags (`-DER`, `-DEC`, `-MinSize`, etc.) accepted with warning
+
+## Pipeline
+| Step | Function | Description |
 |---|---|---|
-| 1 | `seam::computeError` | OKLab ΔE per pixel | `error.tif` |
-| 2 | `seam::findSeam` | BK min-cut seam mask | `seam.tif` |
-| 3 | `seam::visualizeSeam` | OKLCh false-colour diagnostic | `seam_viz.tif` |
-| 4 | `blend::multiBandBlend` | Laplacian pyramid composite | `blend.tif` |
+| 1 | `seam::computeError` | OKLab ΔE per pixel (pairwise) |
+| 2 | `seam::findSeam` | Coarse-to-fine BK min-cut seam (8× downsample + 64px band refinement) |
+| 3 | `buildLabelMap` | Combine pairwise seams into single label map (0..N) |
+| 4 | `blend::multiBandBlend` | N-image Laplacian pyramid composite via label map |
 
 ## Key source files
 ```
+src/main.cpp                — CLI parser, overlap detection, label map, pipeline driver
+src/seam.h   / seam.cpp     — computeError, findSeam (coarse-to-fine), visualizeSeam
+src/blend.h  / blend.cpp    — multiBandBlend (N images + label map → CV_8UC4)
+src/tiff_io.h / tiff_io.cpp — readTiff (with position tags), writeTiff (libtiff, Deflate)
 src/colors.h / colors.cpp   — OKLab/OKLCh conversions (H in degrees)
-src/seam.h   / seam.cpp     — computeError, findSeam, visualizeSeam
-src/blend.h  / blend.cpp    — multiBandBlend (cv::detail::MultiBandBlender)
-src/main.cpp                — pipeline driver
 tests/test_input.cpp        — GTest: validates p1.tif / p2.tif pixel values
+tools/tag_tiff.c            — standalone TIFF tag reader/writer
+tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 ```
+
+## TIFF I/O
+- `writeTiff()` uses libtiff directly (not OpenCV) for:
+  - COMPRESSION_ADOBE_DEFLATE with configurable zlib level (1-9, default 6)
+  - EXTRASAMPLE_UNASSALPHA tag for 4-channel images
+  - BGRA→RGBA channel reorder (OpenCV stores BGR internally)
+- `readTiff()` reads TIFFTAG_XPOSITION/YPOSITION for canvas placement
 
 ## Test data
 - `test-data/p1.tif`, `p2.tif` — 405×240 RGBA float; p2 starts at x=85
-- Source JPEGs: `/mnt/c/dev-c/blend/smartblend/p1.jpg` (319×240), `p2.jpg` (320×240)
+- `test-data/mask.tif`, `mask_viz.tif` — label map from 2-image seam
+- Large test: 3× DSCF photos (5000×3000 each) → 9784×4396 canvas, ~26s
 
 ## OpenCV gotchas
 - `imread` always delivers BGR/BGRA regardless of file format
-- TIFF writer swaps B↔R internally — pass BGRA directly, do NOT pre-convert
 - OKLch H field is in **degrees** (see `convLchToLab` in colors.cpp)
 - `cv::detail::GCGraph` is in `<opencv2/imgproc/detail/gcgraph.hpp>`
 - `cv::detail::MultiBandBlender` needs `find_package(OpenCV … stitching)`
 
 ## What's next
 
-### SmartBlend parity
-1. **Distance error terms (DER/DEC)** — SmartBlend adds a distance-based cost to the
-   seam n-weights: `-DER 0.25` (relative) and `-DEC 0.094` (constant). Likely
-   implemented in `ComputeDirectPixelError` (0x4076b0). Probably distance from image
-   boundary or overlap centre, biasing the seam toward the middle of the overlap.
-2. **High-pass delta** — `-HiPassLevel 4` means sigma = overlapWidth/16 Gaussian blur
-   on the colour difference before squaring. **Do not implement without RE confirmation
-   of exact formula** — naive high-pass on raw ΔE made results worse (see git history).
-3. **RE: `seekTo` (0x407c10)** — likely contains the delta channel computation.
-4. **RE: `compositeBlend` (vtable[13])** — final pixel write-back / alpha handling.
+### SmartBlend parity (not yet implemented)
+1. **Distance error terms (DER/DEC)** — distance-based cost biasing seam toward
+   overlap centre. `-DER 0.25` (relative), `-DEC 0.094` (constant).
+2. **High-pass delta** — `-HiPassLevel 4` means sigma = overlapWidth/16 Gaussian.
+   Do not implement without RE confirmation of exact formula.
 
-### CLI / usability
-- **Enblend-compatible CLI**: `blend img1 [-xoff N] img2 [-xoff N] img3 ... -o out.tif`
-  - Positional args = input files; `-xoff`/`-yoff` follow each image
-  - `-o` output file
-  - `-w`, `-v` accepted and ignored (enblend compat)
-  - `-SeamVerbose` → write error.tif / seam_viz.tif (already done internally)
-  - `-MinSize` → num pyramid bands (currently hardcoded 5)
-- **TIFF position tags** as alternative to `-xoff`/`-yoff`:
-  - `TIFFTAG_XPOSITION` (286) / `TIFFTAG_YPOSITION` (287) — pixel offset in canvas
-  - `TIFFTAG_PIXAR_IMAGEFULLWIDTH` (33300) / `TIFFTAG_PIXAR_IMAGEFULLLENGTH` (33301)
-  - Written by Hugin/PTStitch; xposition_pixels = XPOSITION / XRESOLUTION
-- **Exposure/colour correction** — `cv::detail::GainCompensator` (already linked via
-  stitching module). Run before `computeError` on the overlap region.
+### SEM pipeline (future)
+- **Grayscale + 16-bit support**: SEM images are grayscale 16-bit.
+  Need to handle CV_16UC1/CV_16UC2 on load, convert to float internally.
+  For SEM (linear, no colour) use intensity diff instead of OKLab.
+- **Large grid stitching**: 300×300 images → 90 Gpixel canvas.
+  Architecture: global seam finding (lightweight), tiled/strip-based blending.
+  `-SeamMaskOnly` enables external orchestration — call pairwise, collect masks,
+  reconstruct output in tiles with a separate tool.
 
-## Future / TODO
-
-### Grayscale + 16-bit support (SEM images)
-Goal: reuse the same pipeline for scanning electron microscope (SEM) images,
-which are grayscale and typically 16-bit per channel.
-
-- **Grayscale input**: pipeline currently assumes BGRA float. Need to handle
-  CV_16UC1 (gray) and CV_16UC2 (gray+alpha) on load, convert to float internally.
-- **16-bit**: `imread(IMREAD_UNCHANGED)` loads 16-bit correctly; `convertTo(CV_32F,
-  1.0/65535.0)` for normalisation. OKLab conversion assumes sRGB input — for SEM
-  (linear, no colour) just use L channel directly (skip a/b, use intensity diff).
-- **Gray+alpha TIFF**: OpenCV `imwrite` hard-rejects 2-channel images (assertion:
-  channels must be 1, 3, or 4). Writing gray+alpha requires libtiff directly
-  (already linked via tag_tiff). Alternatively store as 4-channel with R=G=B=gray.
-- **MultiBandBlender**: accepts CV_16SC3 — for grayscale replicate the single channel
-  3× before feeding, or investigate whether CV_16SC1 works.
-
-## SmartBlend formula (Norel 2011)
-> psychovisual error + Kolmogorov min-cut + ENBLEND + subpixel accuracy + pyramid with alpha
+## SmartBlend RE findings
+- **Seam finding**: BK graph-cut, pairwise, with coarse-to-fine multi-scale search.
+- **Multiple images**: strictly pairwise sequential, no N-way blending.
+- **Pyramid blend**: debug images (DBGP_Pyramid_1/2, DBGP_PyramidBlended) suggest a
+  Burt-Adelson pyramid blend exists, but the RE traced call chain concluded hard cut.
+  The enclosing function's prologue was never found — a blend pass may have been missed.
+  Status: **unresolved**. Our MultiBandBlender covers this regardless.
+- Full RE details: `/mnt/c/dev-c/blend/smartblend/08_FinalArchitecture.md`
