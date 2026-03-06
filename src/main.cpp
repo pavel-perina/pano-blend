@@ -1,6 +1,12 @@
+#include <chrono>
 #include <print>
 #include <string>
 #include <vector>
+
+static long long ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 #include "blend.h"
 #include "seam.h"
@@ -118,6 +124,7 @@ int main(int argc, char** argv) {
     }
 
     // --- Read inputs ---
+    auto t0 = ms();
     tiffio::TiffImage t1, t2;
     try {
         t1 = tiffio::readTiff(opts.inputs[0].path, opts.inputs[0].xoff, opts.inputs[0].yoff);
@@ -126,8 +133,10 @@ int main(int argc, char** argv) {
         std::println(stderr, "error: {}", e.what());
         return 1;
     }
+    std::println("  read:         {:6} ms", ms() - t0);
 
     // --- Compute canvas and place images ---
+    t0 = ms();
     const cv::Size canvas = tiffio::canvasSize({ t1, t2 });
     std::println("Canvas: {}x{}", canvas.width, canvas.height);
     std::println("  {} at ({},{})", t1.path, t1.x, t1.y);
@@ -135,27 +144,38 @@ int main(int argc, char** argv) {
 
     const cv::Mat f1 = tiffio::placeOnCanvas(t1, canvas);
     const cv::Mat f2 = tiffio::placeOnCanvas(t2, canvas);
+    std::println("  place:        {:6} ms", ms() - t0);
 
     // --- Pipeline ---
-    const cv::Mat err  = seam::computeError(f1, f2);
+    t0 = ms();
+    const cv::Mat err = seam::computeError(f1, f2);
+    std::println("  computeError: {:6} ms", ms() - t0);
+
+    t0 = ms();
     const cv::Mat mask = seam::findSeam(f1, f2, err);
+    std::println("  findSeam:     {:6} ms", ms() - t0);
 
     if (opts.seam_verbose) {
+        t0 = ms();
         tiffio::writeTiff("error.tif",   err);
         tiffio::writeTiff("seam.tif",    mask);
         const cv::Mat viz = seam::visualizeSeam(f1, f2, err, mask);
         tiffio::writeTiff("seam_viz.tif", viz);
-        std::println("Wrote error.tif, seam.tif, seam_viz.tif");
+        std::println("  seam verbose: {:6} ms  (error.tif, seam.tif, seam_viz.tif)", ms() - t0);
     }
 
+    t0 = ms();
     const cv::Mat blended = blend::multiBandBlend(f1, f2, mask);
+    std::println("  blend:        {:6} ms", ms() - t0);
 
+    t0 = ms();
     try {
         tiffio::writeTiff(opts.output, blended);
     } catch (const std::exception& e) {
         std::println(stderr, "error: {}", e.what());
         return 1;
     }
+    std::println("  write:        {:6} ms", ms() - t0);
     std::println("Written: {}", opts.output);
     return 0;
 }

@@ -38,6 +38,147 @@ cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2) {
     return err;
 }
 
+// ---------------------------------------------------------------------------
+// BK graph-cut on a rectangular region of the error map.
+//
+// Builds a graph over pixels in the crop [ox0,oy0)..[ox1,oy1) of the canvas.
+// Only overlap pixels (both f1 and f2 have alpha > 0.5) get edges.
+// Boundary overlap pixels adjacent to single-image territory get kHard
+// T-weights.  If |band| is non-empty, only pixels where band > 0 participate;
+// pixels at the band boundary get kHard T-weights based on the coarse_mask.
+//
+// Returns a CV_8UC1 mask over the full canvas (0=img1, 255=img2).
+// ---------------------------------------------------------------------------
+static cv::Mat graphCut(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err,
+                        int ox0, int oy0, int ox1, int oy1,
+                        const cv::Mat& band, const cv::Mat& coarse_mask) {
+    const int H = f1.rows;
+    const int W = f1.cols;
+    const int cw = ox1 - ox0;
+    const int ch = oy1 - oy0;
+    const bool use_band = !band.empty();
+
+    constexpr float kHard = 1e6f;
+
+    const int n_vtx = ch * cw;
+    cv::detail::GCGraph<float> graph;
+    graph.create(n_vtx, 2 * n_vtx);
+    for (int i = 0; i < n_vtx; ++i) graph.addVtx();
+
+    for (int cy = 0; cy < ch; ++cy) {
+        const int y = cy + oy0;
+        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(y);
+        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(y);
+        const float*     re = err.ptr<float>(y);
+        const uint8_t*   rb = use_band ? band.ptr<uint8_t>(cy) : nullptr;
+        const uint8_t*   rc = use_band ? coarse_mask.ptr<uint8_t>(y) : nullptr;
+
+        for (int cx = 0; cx < cw; ++cx) {
+            const int x   = cx + ox0;
+            const int idx = cy * cw + cx;
+            const bool in1 = r1[x][3] > 0.5f;
+            const bool in2 = r2[x][3] > 0.5f;
+
+            if (!(in1 && in2)) continue;
+            if (use_band && rb[cx] == 0) continue;
+
+            // --- T-weights ---
+            float tw_src = 0.0f, tw_snk = 0.0f;
+
+            // Adjacent to single-image territory → hard T-weight
+            if ((x > 0   && r1[x-1][3] > 0.5f && r2[x-1][3] <= 0.5f) ||
+                (x+1 < W && r1[x+1][3] > 0.5f && r2[x+1][3] <= 0.5f) ||
+                (y > 0   && f1.ptr<cv::Vec4f>(y-1)[x][3] > 0.5f && f2.ptr<cv::Vec4f>(y-1)[x][3] <= 0.5f) ||
+                (y+1 < H && f1.ptr<cv::Vec4f>(y+1)[x][3] > 0.5f && f2.ptr<cv::Vec4f>(y+1)[x][3] <= 0.5f))
+                tw_src = kHard;
+
+            if ((x > 0   && r2[x-1][3] > 0.5f && r1[x-1][3] <= 0.5f) ||
+                (x+1 < W && r2[x+1][3] > 0.5f && r1[x+1][3] <= 0.5f) ||
+                (y > 0   && f2.ptr<cv::Vec4f>(y-1)[x][3] > 0.5f && f1.ptr<cv::Vec4f>(y-1)[x][3] <= 0.5f) ||
+                (y+1 < H && f2.ptr<cv::Vec4f>(y+1)[x][3] > 0.5f && f1.ptr<cv::Vec4f>(y+1)[x][3] <= 0.5f))
+                tw_snk = kHard;
+
+            // In band mode: pixels at the band edge get hard T-weight from coarse mask
+            if (use_band) {
+                bool at_band_edge = false;
+                if (cx > 0    && rb[cx-1] == 0) at_band_edge = true;
+                if (cx+1 < cw && rb[cx+1] == 0) at_band_edge = true;
+                if (cy > 0    && band.ptr<uint8_t>(cy-1)[cx] == 0) at_band_edge = true;
+                if (cy+1 < ch && band.ptr<uint8_t>(cy+1)[cx] == 0) at_band_edge = true;
+
+                if (at_band_edge) {
+                    if (rc[x] == 0) tw_src = kHard;  // coarse says img1 → source
+                    else            tw_snk = kHard;  // coarse says img2 → sink
+                }
+            }
+
+            if (tw_src > 0 || tw_snk > 0)
+                graph.addTermWeights(idx, tw_src, tw_snk);
+
+            // --- N-weight edges (quantised to integer scale) ---
+            const int du = std::min(255, static_cast<int>(re[x] * 255.0f));
+
+            // Right neighbour
+            if (cx + 1 < cw && r1[x+1][3] > 0.5f && r2[x+1][3] > 0.5f &&
+                (!use_band || rb[cx+1] != 0)) {
+                const int dv = std::min(255, static_cast<int>(re[x+1] * 255.0f));
+                const float cap = static_cast<float>(du*du + dv*dv);
+                graph.addEdges(idx, idx + 1, cap, cap);
+            }
+
+            // Down neighbour
+            if (cy + 1 < ch) {
+                const int ny = y + 1;
+                const cv::Vec4f* nr1 = f1.ptr<cv::Vec4f>(ny);
+                const cv::Vec4f* nr2 = f2.ptr<cv::Vec4f>(ny);
+                const uint8_t* nrb = use_band ? band.ptr<uint8_t>(cy+1) : nullptr;
+                if (nr1[x][3] > 0.5f && nr2[x][3] > 0.5f &&
+                    (!use_band || nrb[cx] != 0)) {
+                    const int dv = std::min(255, static_cast<int>(err.ptr<float>(ny)[x] * 255.0f));
+                    const float cap = static_cast<float>(du*du + dv*dv);
+                    graph.addEdges(idx, cy * cw + cw + cx, cap, cap);
+                }
+            }
+        }
+    }
+
+    graph.maxFlow();
+
+    // Build full-size mask.  For each pixel:
+    //   - Both images present (overlap) → use graph cut result
+    //   - Only img1 → mask=0 (use img1)
+    //   - Only img2 → mask=255 (use img2)
+    //   - Neither   → mask=0 (transparent either way)
+    cv::Mat mask(H, W, CV_8UC1);
+    for (int y = 0; y < H; ++y) {
+        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(y);
+        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(y);
+        uint8_t*         rm = mask.ptr<uint8_t>(y);
+        const bool in_crop_y = (y >= oy0 && y < oy1);
+
+        for (int x = 0; x < W; ++x) {
+            const bool in1 = r1[x][3] > 0.5f;
+            const bool in2 = r2[x][3] > 0.5f;
+
+            if (!(in1 && in2)) {
+                // Single-image or empty pixel — no graph cut needed
+                rm[x] = (in2 && !in1) ? 255 : 0;
+            } else if (in_crop_y && x >= ox0 && x < ox1) {
+                const int cy = y - oy0, cx = x - ox0;
+                if (use_band && band.ptr<uint8_t>(cy)[cx] == 0) {
+                    rm[x] = coarse_mask.ptr<uint8_t>(y)[x];
+                } else {
+                    rm[x] = graph.inSourceSegment(cy * cw + cx) ? 0 : 255;
+                }
+            } else {
+                // Overlap pixel outside crop (shouldn't happen, but safe fallback)
+                rm[x] = 0;
+            }
+        }
+    }
+    return mask;
+}
+
 cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
     const int H = f1.rows;
     const int W = f1.cols;
@@ -71,134 +212,70 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
     const int ch = oy1 - oy0;
     std::println("  Overlap crop: {}x{} at ({},{}) [canvas {}x{}]", cw, ch, ox0, oy0, W, H);
 
-    // --- Distance-based T-weights for overlap pixels (analogous to SmartBlend's DER/DEC) ---
+    // --- Coarse-to-fine seam finding ---
     //
-    // SmartBlend assigns small terminal weights to overlap pixels based on their
-    // distance from the img1/img2 coverage boundaries.  Pixels close to img1
-    // territory get a small positive T-weight (source bias) and vice versa.
-    // This seeds overlap pixels directly into BK trees, so no kHard N-weight
-    // edges at the overlap boundary are needed — the total flow is then bounded
-    // by the N-weight capacities, making BK very fast.
-    //
-    // kBias: T-weight per pixel of distance difference (img1 vs img2 boundary).
-    // Must be much smaller than typical N-weight so N-weights dominate seam choice.
-    constexpr float kBias = 1e-4f;
+    // 1. Coarse pass: downsample images+error, run BK on small graph.
+    //    Even with deep BK trees, the graph is small → fast.
+    // 2. Fine pass: build full-res graph only in a narrow band around
+    //    the coarse seam.  Band edges get hard T-weights from coarse mask.
+    //    Band is narrow → shallow trees → fast, no bias.
 
-    // Build single-image masks over the crop
-    cv::Mat mask_in1(ch, cw, CV_8U, cv::Scalar(0));
-    cv::Mat mask_in2(ch, cw, CV_8U, cv::Scalar(0));
-    for (int cy = 0; cy < ch; ++cy) {
-        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(cy + oy0);
-        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(cy + oy0);
-        uint8_t* m1 = mask_in1.ptr<uint8_t>(cy);
-        uint8_t* m2 = mask_in2.ptr<uint8_t>(cy);
-        for (int cx = 0; cx < cw; ++cx) {
-            const int x = cx + ox0;
-            const bool in1 = r1[x][3] > 0.5f;
-            const bool in2 = r2[x][3] > 0.5f;
-            m1[cx] = (in1 && !in2) ? 255 : 0;
-            m2[cx] = (!in1 && in2) ? 255 : 0;
-        }
+    constexpr int kScale = 8;       // downsample factor for coarse pass
+    constexpr int kBandRadius = 64; // half-width of refinement band (pixels)
+
+    // For small overlaps, skip coarse pass — run directly
+    if (cw < kScale * 4 || ch < kScale * 4) {
+        return graphCut(f1, f2, err, ox0, oy0, ox1, oy1, {}, {});
     }
 
-    // dist1f[cy][cx] = distance (pixels) from (cx,cy) to nearest img1-only pixel
-    // dist2f[cy][cx] = distance (pixels) from (cx,cy) to nearest img2-only pixel
-    // distanceTransform computes: for each non-zero pixel, distance to nearest zero.
-    // Input  = 255 - mask  → zeros mark the region we want distance FROM.
-    cv::Mat dist1f, dist2f;
-    cv::distanceTransform(255 - mask_in1, dist1f, cv::DIST_L2, cv::DIST_MASK_PRECISE);
-    cv::distanceTransform(255 - mask_in2, dist2f, cv::DIST_L2, cv::DIST_MASK_PRECISE);
+    // --- Coarse pass ---
+    cv::Mat f1_small, f2_small, err_small;
+    cv::resize(f1, f1_small, {}, 1.0 / kScale, 1.0 / kScale, cv::INTER_AREA);
+    cv::resize(f2, f2_small, {}, 1.0 / kScale, 1.0 / kScale, cv::INTER_AREA);
+    cv::resize(err, err_small, {}, 1.0 / kScale, 1.0 / kScale, cv::INTER_AREA);
 
-    // --- Build BK graph on the crop ---
-    cv::detail::GCGraph<float> graph;
-    graph.create(ch * cw, 4 * ch * cw);
-    for (int i = 0; i < ch * cw; ++i) graph.addVtx();
+    const int sH = f1_small.rows, sW = f1_small.cols;
+    const int sox0 = ox0 / kScale, soy0 = oy0 / kScale;
+    const int sox1 = std::min(sW, ox1 / kScale + 1);
+    const int soy1 = std::min(sH, oy1 / kScale + 1);
 
-    constexpr float kHard = 1e6f;
+    std::println("  Coarse pass: {}x{} (1/{})", sox1-sox0, soy1-soy0, kScale);
+    cv::Mat coarse_mask = graphCut(f1_small, f2_small, err_small,
+                                   sox0, soy0, sox1, soy1, {}, {});
 
+    // Upscale coarse mask to full resolution
+    cv::Mat coarse_full;
+    cv::resize(coarse_mask, coarse_full, {W, H}, 0, 0, cv::INTER_NEAREST);
+
+    // --- Build band mask around coarse seam ---
+    // Find seam pixels (where mask changes between neighbours) and dilate
+    cv::Mat seam_edge(ch, cw, CV_8UC1, cv::Scalar(0));
     for (int cy = 0; cy < ch; ++cy) {
         const int y = cy + oy0;
-        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(y);
-        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(y);
-        const float*     re = err.ptr<float>(y);
-        const float*     d1 = dist1f.ptr<float>(cy);
-        const float*     d2 = dist2f.ptr<float>(cy);
-
+        const uint8_t* rm = coarse_full.ptr<uint8_t>(y);
+        uint8_t*       se = seam_edge.ptr<uint8_t>(cy);
         for (int cx = 0; cx < cw; ++cx) {
-            const int x       = cx + ox0;
-            const int idx     = cy * cw + cx;
-            const bool in1    = r1[x][3] > 0.5f;
-            const bool in2    = r2[x][3] > 0.5f;
-            const bool overlap = in1 && in2;
-
-            // T-weight: positive = source (img1 side), negative = sink (img2 side)
-            if (in1 && !in2) {
-                graph.addTermWeights(idx, kHard, 0.0f);
-            } else if (!in1 && in2) {
-                graph.addTermWeights(idx, 0.0f, kHard);
-            } else if (overlap) {
-                // Distance-based bias: positive near img1 boundary, negative near img2
-                const float tw = kBias * (d2[cx] - d1[cx]);
-                if      (tw > 0.0f) graph.addTermWeights(idx, tw, 0.0f);
-                else if (tw < 0.0f) graph.addTermWeights(idx, 0.0f, -tw);
-                // tw == 0 (equidistant): free node, assigned by cut structure
-            }
-            // else: outside both images → free node, irrelevant to seam
-
-            // N-weights: only between doubly-covered (overlap) pixels.
-            // No kHard edges at the overlap boundary — single-image pixels are
-            // hard-pinned by their T-weights, so the cut stays inside the overlap.
-            if (!overlap) continue;
-
-            const float eu = re[x];
-
-            // Right neighbour
-            if (cx + 1 < cw) {
-                const bool n_in1 = r1[x+1][3] > 0.5f;
-                const bool n_in2 = r2[x+1][3] > 0.5f;
-                if (n_in1 && n_in2) {
-                    const float ev  = re[x + 1];
-                    const float cap = eu*eu + ev*ev;
-                    graph.addEdges(idx, idx + 1, cap, cap);
-                }
-            }
-
-            // Down neighbour
-            if (cy + 1 < ch) {
-                const int ny   = y + 1;
-                const int nidx = idx + cw;
-                const cv::Vec4f* nr1 = f1.ptr<cv::Vec4f>(ny);
-                const cv::Vec4f* nr2 = f2.ptr<cv::Vec4f>(ny);
-                const bool n_in1 = nr1[x][3] > 0.5f;
-                const bool n_in2 = nr2[x][3] > 0.5f;
-                if (n_in1 && n_in2) {
-                    const float ev  = err.ptr<float>(ny)[x];
-                    const float cap = eu*eu + ev*ev;
-                    graph.addEdges(idx, nidx, cap, cap);
-                }
-            }
+            const int x = cx + ox0;
+            const uint8_t v = rm[x];
+            if ((cx+1 < cw && rm[x+1] != v) ||
+                (cy+1 < ch && coarse_full.ptr<uint8_t>(y+1)[x] != v))
+                se[cx] = 255;
         }
     }
 
-    graph.maxFlow();
+    cv::Mat band_mask;
+    const int diam = 2 * kBandRadius + 1;
+    cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, {diam, diam});
+    cv::dilate(seam_edge, band_mask, kernel);
 
-    // --- Build full-size mask ---
-    cv::Mat mask(H, W, CV_8UC1);
-    for (int y = 0; y < H; ++y) {
-        const cv::Vec4f* r1 = f1.ptr<cv::Vec4f>(y);
-        const cv::Vec4f* r2 = f2.ptr<cv::Vec4f>(y);
-        uint8_t*         rm = mask.ptr<uint8_t>(y);
-        const bool in_crop_y = (y >= oy0 && y < oy1);
+    // Count band pixels
+    int band_pixels = cv::countNonZero(band_mask);
+    std::println("  Fine band: {} pixels (vs {} overlap)", band_pixels, cw * ch);
 
-        for (int x = 0; x < W; ++x) {
-            if (in_crop_y && x >= ox0 && x < ox1) {
-                rm[x] = graph.inSourceSegment((y - oy0) * cw + (x - ox0)) ? 0 : 255;
-            } else {
-                rm[x] = (r2[x][3] > 0.5f && r1[x][3] <= 0.5f) ? 255 : 0;
-            }
-        }
-    }
-    return mask;
+    // --- Fine pass ---
+    cv::Mat fine_mask = graphCut(f1, f2, err, ox0, oy0, ox1, oy1,
+                                 band_mask, coarse_full);
+    return fine_mask;
 }
 
 cv::Mat visualizeSeam(const cv::Mat& f1, const cv::Mat& f2,
