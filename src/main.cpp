@@ -1,5 +1,7 @@
 #include <chrono>
+#include <cstdlib>
 #include <print>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -22,11 +24,19 @@ struct InputArg {
     int yoff = -1;
 };
 
+struct CanvasGeometry {
+    int width  = 0;
+    int height = 0;
+    int xoff   = 0;
+    int yoff   = 0;
+};
+
 struct Options {
     std::vector<InputArg> inputs;
     std::string           output;
     std::string           seam_mask_only;  // if set, write label map and exit
     bool                  seam_verbose = false;
+    CanvasGeometry        canvas_geom;     // -f geometry override (0 = auto)
 };
 
 static void usage(const char* argv0) {
@@ -35,6 +45,7 @@ static void usage(const char* argv0) {
         argv0);
     std::println(stderr, "  -xoff/-yoff      pixel offset for the preceding image (overrides TIFF tags)");
     std::println(stderr, "  -o / --output    output TIFF");
+    std::println(stderr, "  -f WxH+X+Y       force canvas geometry (enblend compat, no space ok)");
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
     std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz)");
     std::println(stderr, "  -w -v            accepted and ignored (enblend compat)");
@@ -50,6 +61,20 @@ static bool isValueOpt(const std::string& s) {
     for (int i = 0; kValueOpts[i]; ++i)
         if (s == kValueOpts[i]) return true;
     return false;
+}
+
+// Parse X11/ImageMagick geometry: WIDTHxHEIGHT+XOFF+YOFF
+// Returns true on success.
+static bool parseGeometry(const std::string& s, CanvasGeometry& g) {
+    // Match: digits "x" digits "+" digits "+" digits
+    static const std::regex re(R"((\d+)x(\d+)\+(\d+)\+(\d+))");
+    std::smatch m;
+    if (!std::regex_match(s, m, re)) return false;
+    g.width  = std::stoi(m[1]);
+    g.height = std::stoi(m[2]);
+    g.xoff   = std::stoi(m[3]);
+    g.yoff   = std::stoi(m[4]);
+    return true;
 }
 
 static Options parseArgs(int argc, char** argv) {
@@ -76,6 +101,24 @@ static Options parseArgs(int argc, char** argv) {
             if (!opts.inputs.empty()) {
                 opts.inputs.back().yoff = pending_yoff;
                 pending_yoff = -1;
+            }
+        } else if (a == "-f" || a.starts_with("-f") ) {
+            // -f WxH+X+Y  or  -fWxH+X+Y (no space)
+            std::string geom_str;
+            if (a == "-f") {
+                if (i + 1 >= argc) { std::println(stderr, "-f: requires geometry argument"); std::exit(1); }
+                geom_str = argv[++i];
+            } else {
+                geom_str = a.substr(2);  // strip "-f"
+            }
+            if (!parseGeometry(geom_str, opts.canvas_geom)) {
+                std::println(stderr, "error: invalid geometry '{}' (expected WxH+X+Y)", geom_str);
+                std::exit(1);
+            }
+            if (opts.canvas_geom.width <= 0 || opts.canvas_geom.height <= 0) {
+                std::println(stderr, "error: canvas dimensions must be positive (got {}x{})",
+                             opts.canvas_geom.width, opts.canvas_geom.height);
+                std::exit(1);
             }
         } else if (a == "-SeamMaskOnly") {
             if (i + 1 >= argc) { std::println(stderr, "-SeamMaskOnly: requires argument"); std::exit(1); }
@@ -212,8 +255,31 @@ int main(int argc, char** argv) {
 
     // --- Compute canvas and place images ---
     t0 = ms();
-    const cv::Size canvas = tiffio::canvasSize(images);
-    std::println("Canvas: {}x{}", canvas.width, canvas.height);
+    cv::Size canvas = tiffio::canvasSize(images);
+
+    // Apply -f geometry override
+    if (opts.canvas_geom.width > 0) {
+        const auto& g = opts.canvas_geom;
+        // Shift all image positions by the geometry offset
+        for (int i = 0; i < N; ++i) {
+            images[i].x -= g.xoff;
+            images[i].y -= g.yoff;
+        }
+        canvas = {g.width, g.height};
+
+        // Validate: warn if any image falls entirely outside the canvas
+        for (int i = 0; i < N; ++i) {
+            const int ix1 = images[i].x + images[i].mat.cols;
+            const int iy1 = images[i].y + images[i].mat.rows;
+            if (ix1 <= 0 || iy1 <= 0 || images[i].x >= g.width || images[i].y >= g.height) {
+                std::println(stderr, "warning: '{}' at ({},{}) falls outside canvas {}x{}",
+                             images[i].path, images[i].x, images[i].y, g.width, g.height);
+            }
+        }
+        std::println("Canvas: {}x{} (from -f, offset {},{})", canvas.width, canvas.height, g.xoff, g.yoff);
+    } else {
+        std::println("Canvas: {}x{}", canvas.width, canvas.height);
+    }
     for (int i = 0; i < N; ++i)
         std::println("  {} at ({},{})", images[i].path, images[i].x, images[i].y);
 
