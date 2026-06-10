@@ -18,6 +18,10 @@ cmake -S . -B build -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --parallel
 ctest --test-dir build # runs GTest suite
 ```
+Windows: `conanfile.txt` + `conan_profile_msvc2026` (MSVC 195, cppstd 23, Ninja).
+Unverified: whether conan's generated OpenCVConfig honors
+`find_package(OpenCV COMPONENTS …)` and defines `OpenCV_LIBS` — if configure
+fails there, link `opencv::opencv_core` etc. directly.
 
 ## CLI
 ```
@@ -26,6 +30,8 @@ blend img1.tif img2.tif -SeamMaskOnly mask.tif   # label map only, no blending
 blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 ```
 - Image positions read from TIFF tags (XPOSITION/YPOSITION), or `-xoff`/`-yoff`
+  (may be negative; `tiffio::kNoPos` = INT_MIN is the "not specified" sentinel)
+- `-f WxH+X+Y` — canvas geometry; offsets may be negative (`-12` or `+-12` style)
 - `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit
 - `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images)
 - `-w`, `-v` accepted and ignored (enblend compat)
@@ -34,10 +40,25 @@ blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 ## Pipeline
 | Step | Function | Description |
 |---|---|---|
-| 1 | `seam::computeError` | OKLab ΔE per pixel (pairwise) |
-| 2 | `seam::findSeam` | Coarse-to-fine BK min-cut seam (8× downsample + 64px band refinement) |
+| 1 | `seam::computeError` | OKLab ΔE per pixel; computed only inside the pair's overlap rect, row-parallel; rest of canvas = `seam::kNoOverlap` sentinel |
+| 2 | `seam::findSeam` | Coarse-to-fine BK min-cut seam (8× downsample + 64px band refinement); works crop-local on alpha channels only |
 | 3 | `buildLabelMap` | Combine pairwise seams into single label map (0..N) |
-| 4 | `blend::multiBandBlend` | N-image Laplacian pyramid composite via label map |
+| 4 | `blend::multiBandBlend` | N-image Laplacian pyramid composite via label map; feeds per-image bounding rects, not full canvas |
+
+### Seam-finding invariants (learned the hard way)
+- **No pixel overlap ≠ all-zeros mask**: when bounding boxes intersect but opaque
+  pixels don't (warped images, transparent corners), `findSeam` must return the
+  coverage split — an all-zero mask makes `buildLabelMap` hand image j's territory
+  to image i and punches holes in the output.
+- **Crop expansion = kScale (8), not 1**: the coarse pass downsamples the crop, so
+  a 1px single-image border vanishes at 1/8 scale → no hard T-weights → the coarse
+  cut is unconstrained (uniform mask, empty band, `maxFlow` assert on empty graph).
+- **Do not add a smoothness epsilon to edge capacities**: zero-capacity edges are
+  skipped; where images are identical the seam position is irrelevant to the output.
+  A `+1` prior was tried and reverted — it turns identical-content overlaps into
+  BK's pathological case (1 s → 33 s on a 1200×3000 overlap).
+- `GCGraph::maxFlow()` asserts on an edgeless graph; `graphCut` guards this and
+  falls back to coarse mask / img1.
 
 ## Key source files
 ```
@@ -53,15 +74,25 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 
 ## TIFF I/O
 - `writeTiff()` uses libtiff directly (not OpenCV) for:
-  - COMPRESSION_ADOBE_DEFLATE with configurable zlib level (1-9, default 6)
+  - COMPRESSION_ADOBE_DEFLATE with configurable zlib level (1-9, default 1)
+    + PREDICTOR_HORIZONTAL (predictor recovers most of the ratio on photos;
+    level 6 cost seconds on big canvases)
   - EXTRASAMPLE_UNASSALPHA tag for 4-channel images
   - BGRA→RGBA channel reorder (OpenCV stores BGR internally)
 - `readTiff()` reads TIFFTAG_XPOSITION/YPOSITION for canvas placement
+- `readTiff()` rejects with a clear error what the scanline reader would
+  silently misread: tiled TIFFs, planar-separate layout, non-uint sample formats
 
 ## Test data
-- `test-data/p1.tif`, `p2.tif` — 405×240 RGBA float; p2 starts at x=85
+- `test-data/p1.tif`, `p2.tif` — 405×240 8-bit RGBA (loaded as float internally);
+  p2 starts at x=85
 - `test-data/mask.tif`, `mask_viz.tif` — label map from 2-image seam
 - Large test: 3× DSCF photos (5000×3000 each) → 9784×4396 canvas, ~26s
+  (pre-optimization figure — re-measure)
+- Perf baseline (2026-06, sandbox): 2× 5000×3000, 1200px noisy overlap:
+  18.5 s → 14.2 s after crop-local seam/ROI blend/level-1 write
+  (computeError 1033→331 ms, blend 3929→2235 ms, write 5221→4118 ms);
+  remaining hotspot is the fine-pass BK itself (~5 s on dense-error overlap)
 
 ## OpenCV gotchas
 - `imread` always delivers BGR/BGRA regardless of file format
@@ -70,6 +101,14 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 - `cv::detail::MultiBandBlender` needs `find_package(OpenCV … stitching)`
 
 ## What's next
+
+### Performance (next wins, in order)
+1. **Band-only graph vertices**: fine-pass `graphCut` still allocates a vertex per
+   crop pixel; an index-remap of band pixels would shrink the BK graph ~10×.
+   This is the remaining hotspot (~5 s fine pass on a 1200×3000 dense overlap).
+2. **Crop-based architecture**: `placeOnCanvas` still materializes a full-canvas
+   CV_32FC4 (16 B/px) per image — the memory/scaling blocker for the SEM grid.
+   Keep crops + offsets; do seam work in overlap-local coordinates.
 
 ### SmartBlend parity (not yet implemented)
 1. **Distance error terms (DER/DEC)** — distance-based cost biasing seam toward
