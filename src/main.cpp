@@ -1,3 +1,4 @@
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <print>
@@ -20,8 +21,8 @@ static long long ms() {
 
 struct InputArg {
     std::string path;
-    int xoff = -1;  // -1 = read from TIFF tags
-    int yoff = -1;
+    int xoff = tiffio::kNoPos;  // kNoPos = read from TIFF tags
+    int yoff = tiffio::kNoPos;
 };
 
 struct CanvasGeometry {
@@ -63,24 +64,42 @@ static bool isValueOpt(const std::string& s) {
     return false;
 }
 
+// Parse an integer option value; exits with a clear message instead of an
+// uncaught std::stoi exception on garbage like `-xoff abc`.
+static int parseInt(const char* opt, const std::string& val) {
+    try {
+        size_t pos = 0;
+        const int v = std::stoi(val, &pos);
+        if (pos != val.size()) throw std::invalid_argument(val);
+        return v;
+    } catch (const std::exception&) {
+        std::println(stderr, "error: {}: invalid integer '{}'", opt, val);
+        std::exit(1);
+    }
+}
+
 // Parse X11/ImageMagick geometry: WIDTHxHEIGHT+XOFF+YOFF
+// Offsets may be negative, written either "-12" or ImageMagick-style "+-12".
 // Returns true on success.
 static bool parseGeometry(const std::string& s, CanvasGeometry& g) {
-    // Match: digits "x" digits "+" digits "+" digits
-    static const std::regex re(R"((\d+)x(\d+)\+(\d+)\+(\d+))");
+    static const std::regex re(R"((\d+)x(\d+)([+-]-?\d+)([+-]-?\d+))");
     std::smatch m;
     if (!std::regex_match(s, m, re)) return false;
+    auto geomInt = [](std::string v) {
+        if (v[0] == '+') v.erase(0, 1);  // "+-12" → "-12", "+12" → "12"
+        return std::stoi(v);
+    };
     g.width  = std::stoi(m[1]);
     g.height = std::stoi(m[2]);
-    g.xoff   = std::stoi(m[3]);
-    g.yoff   = std::stoi(m[4]);
+    g.xoff   = geomInt(m[3]);
+    g.yoff   = geomInt(m[4]);
     return true;
 }
 
 static Options parseArgs(int argc, char** argv) {
     Options opts;
-    int     pending_xoff = -1;
-    int     pending_yoff = -1;
+    int     pending_xoff = tiffio::kNoPos;
+    int     pending_yoff = tiffio::kNoPos;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -90,19 +109,21 @@ static Options parseArgs(int argc, char** argv) {
             opts.output = argv[++i];
         } else if (a == "-xoff") {
             if (i + 1 >= argc) { std::println(stderr, "-xoff: requires argument"); std::exit(1); }
-            pending_xoff = std::stoi(argv[++i]);
+            pending_xoff = parseInt("-xoff", argv[++i]);
             if (!opts.inputs.empty()) {
                 opts.inputs.back().xoff = pending_xoff;
-                pending_xoff = -1;
+                pending_xoff = tiffio::kNoPos;
             }
         } else if (a == "-yoff") {
             if (i + 1 >= argc) { std::println(stderr, "-yoff: requires argument"); std::exit(1); }
-            pending_yoff = std::stoi(argv[++i]);
+            pending_yoff = parseInt("-yoff", argv[++i]);
             if (!opts.inputs.empty()) {
                 opts.inputs.back().yoff = pending_yoff;
-                pending_yoff = -1;
+                pending_yoff = tiffio::kNoPos;
             }
-        } else if (a == "-f" || a.starts_with("-f") ) {
+        } else if (a == "-f" ||
+                   (a.starts_with("-f") && a.size() > 2 &&
+                    std::isdigit(static_cast<unsigned char>(a[2])))) {
             // -f WxH+X+Y  or  -fWxH+X+Y (no space)
             std::string geom_str;
             if (a == "-f") {
@@ -138,8 +159,8 @@ static Options parseArgs(int argc, char** argv) {
             // Positional: input file
             InputArg inp;
             inp.path = a;
-            if (pending_xoff >= 0) { inp.xoff = pending_xoff; pending_xoff = -1; }
-            if (pending_yoff >= 0) { inp.yoff = pending_yoff; pending_yoff = -1; }
+            if (pending_xoff != tiffio::kNoPos) { inp.xoff = pending_xoff; pending_xoff = tiffio::kNoPos; }
+            if (pending_yoff != tiffio::kNoPos) { inp.yoff = pending_yoff; pending_yoff = tiffio::kNoPos; }
             opts.inputs.push_back(std::move(inp));
         }
     }
@@ -308,7 +329,15 @@ int main(int argc, char** argv) {
 
         t0 = ms();
         const bool gray = images[pair.i].grayscale && images[pair.j].grayscale;
-        const cv::Mat err = seam::computeError(canvas_images[pair.i], canvas_images[pair.j], gray);
+        // Pixel overlap can only occur inside the bounding-box intersection,
+        // so fill with the sentinel and compute the error there only.
+        cv::Mat err(canvas, CV_32FC1, cv::Scalar(seam::kNoOverlap));
+        const cv::Rect roi = pair.overlap & cv::Rect(0, 0, canvas.width, canvas.height);
+        if (!roi.empty()) {
+            cv::Mat err_roi = err(roi);
+            seam::computeError(canvas_images[pair.i](roi), canvas_images[pair.j](roi),
+                               err_roi, gray);
+        }
         std::println("    computeError: {:6} ms{}", ms() - t0, gray ? "  (grayscale)" : "");
 
         t0 = ms();
@@ -318,21 +347,21 @@ int main(int argc, char** argv) {
         if (opts.seam_verbose) {
             t0 = ms();
             if (pairs.size() == 1) {
-                tiffio::writeTiff("error.tif",    err,  9);
-                tiffio::writeTiff("seam.tif",     seam_masks[p], 9);
+                tiffio::writeTiff("error.tif",    err);
+                tiffio::writeTiff("seam.tif",     seam_masks[p]);
                 const cv::Mat viz = seam::visualizeSeam(canvas_images[pair.i], canvas_images[pair.j],
                                                         err, seam_masks[p]);
-                tiffio::writeTiff("seam_viz.tif", viz,  9);
+                tiffio::writeTiff("seam_viz.tif", viz);
                 std::println("    seam verbose: {:6} ms  (error.tif, seam.tif, seam_viz.tif)", ms() - t0);
             } else {
                 auto ef = std::format("error_{}_{}.tif", pair.i, pair.j);
                 auto sf = std::format("seam_{}_{}.tif", pair.i, pair.j);
                 auto vf = std::format("seam_viz_{}_{}.tif", pair.i, pair.j);
-                tiffio::writeTiff(ef, err,  9);
-                tiffio::writeTiff(sf, seam_masks[p], 9);
+                tiffio::writeTiff(ef, err);
+                tiffio::writeTiff(sf, seam_masks[p]);
                 const cv::Mat viz = seam::visualizeSeam(canvas_images[pair.i], canvas_images[pair.j],
                                                         err, seam_masks[p]);
-                tiffio::writeTiff(vf, viz,  9);
+                tiffio::writeTiff(vf, viz);
                 std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - t0, ef, sf, vf);
             }
         }

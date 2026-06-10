@@ -42,6 +42,28 @@ TiffImage readTiff(const std::string& path, int xoff, int yoff) {
             "'{}': {}-bit not supported (only 8 and 16)", path, bps));
     }
 
+    // Reject layouts the scanline reader below would silently misread.
+    if (TIFFIsTiled(tif)) {
+        TIFFClose(tif);
+        throw std::runtime_error(std::format(
+            "'{}': tiled TIFF not supported (strip layout only)", path));
+    }
+    uint16_t planar = PLANARCONFIG_CONTIG;
+    TIFFGetFieldDefaulted(tif, TIFFTAG_PLANARCONFIG, &planar);
+    if (planar != PLANARCONFIG_CONTIG && spp > 1) {
+        TIFFClose(tif);
+        throw std::runtime_error(std::format(
+            "'{}': planar (separate-channel) TIFF not supported", path));
+    }
+    uint16_t sample_fmt = SAMPLEFORMAT_UINT;
+    TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sample_fmt);
+    if (sample_fmt != SAMPLEFORMAT_UINT && sample_fmt != SAMPLEFORMAT_VOID) {
+        TIFFClose(tif);
+        throw std::runtime_error(std::format(
+            "'{}': sample format {} not supported (unsigned integer only)",
+            path, sample_fmt));
+    }
+
     const bool is_gray = (photo == PHOTOMETRIC_MINISBLACK || photo == PHOTOMETRIC_MINISWHITE);
     const bool is_rgb  = (photo == PHOTOMETRIC_RGB);
     if (!is_gray && !is_rgb) {
@@ -122,8 +144,8 @@ TiffImage readTiff(const std::string& path, int xoff, int yoff) {
 
     TiffImage result;
     result.mat       = std::move(mat);
-    result.x         = (xoff >= 0) ? xoff : static_cast<int>(std::round(tx * xres));
-    result.y         = (yoff >= 0) ? yoff : static_cast<int>(std::round(ty * yres));
+    result.x         = (xoff != kNoPos) ? xoff : static_cast<int>(std::round(tx * xres));
+    result.y         = (yoff != kNoPos) ? yoff : static_cast<int>(std::round(ty * yres));
     result.canvas_w  = static_cast<int>(canvas_w);
     result.canvas_h  = static_cast<int>(canvas_h);
     result.grayscale = is_gray;
@@ -188,6 +210,7 @@ void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     ch >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_COMPRESSION,     COMPRESSION_ADOBE_DEFLATE);
     TIFFSetField(tif, TIFFTAG_ZIPQUALITY,      compression);
+    TIFFSetField(tif, TIFFTAG_PREDICTOR,       PREDICTOR_HORIZONTAL);
     TIFFSetField(tif, TIFFTAG_PLANARCONFIG,    PLANARCONFIG_CONTIG);
     TIFFSetField(tif, TIFFTAG_ROWSPERSTRIP,    TIFFDefaultStripSize(tif, 0));
 

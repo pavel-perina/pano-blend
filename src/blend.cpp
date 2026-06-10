@@ -20,20 +20,25 @@ cv::Mat multiBandBlend(const std::vector<cv::Mat>& images,
         cv::compare(label_map, i + 1, territory, cv::CMP_EQ);
 
         // Presence mask: where this image has opaque pixels
-        std::vector<cv::Mat> ch;
-        cv::split(images[i], ch);
-        cv::Mat present = ch[3] > 0.5f;
+        cv::Mat alpha;
+        cv::extractChannel(images[i], alpha, 3);
+        cv::Mat present = alpha > 0.5f;
 
         // Final mask: image must be present AND own the territory
         cv::Mat mask;
         cv::bitwise_and(territory, present, mask);
 
-        // Convert float BGR [0,1] → CV_16SC3 [0,255]
+        // Feed only the image's bounding rect — each feed builds a pyramid
+        // over the fed rect, so full-canvas feeds would cost N× canvas.
+        const cv::Rect roi = cv::boundingRect(present);
+        if (roi.empty()) continue;
+
+        // Convert float BGRA [0,1] → CV_16SC3 [0,255]
         cv::Mat bgr, bgr_16s;
-        cv::merge(std::vector<cv::Mat>{ch[0], ch[1], ch[2]}, bgr);
+        cv::cvtColor(images[i](roi), bgr, cv::COLOR_BGRA2BGR);
         bgr.convertTo(bgr_16s, CV_16SC3, 255.0);
 
-        blender.feed(bgr_16s, mask, cv::Point(0, 0));
+        blender.feed(bgr_16s, mask(roi), roi.tl());
     }
 
     cv::Mat dst_bgr, dst_mask;

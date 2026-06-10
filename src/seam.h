@@ -4,13 +4,21 @@
 
 namespace seam {
 
+// Sentinel for pixels outside the overlap — finite, larger than any real
+// OKLab distance, safe for downstream squaring in n-weight computation.
+inline constexpr float kNoOverlap = 1e6f;
+
 // Per-pixel distance between two float BGRA images (CV_32FC4).
 // Color images: OKLab perceptual distance. Grayscale: absolute intensity diff.
-// Pixels not covered by both images are filled with a large sentinel value.
-cv::Mat computeError(const cv::Mat& f1, const cv::Mat& f2, bool grayscale = false);
+// Pixels not covered by both images are filled with kNoOverlap.
+// err must be preallocated CV_32FC1 of the same size (ROI views are fine).
+void computeError(const cv::Mat& f1, const cv::Mat& f2, cv::Mat& err,
+                  bool grayscale = false);
 
 // Boykov-Kolmogorov graph-cut seam.
 // Returns CV_8UC1 mask: 0 = image1 (source side), 255 = image2 (sink side).
+// Outside the overlap, single-image pixels keep their own side; if the two
+// images share no pixels at all, the mask is just the coverage split.
 cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err);
 
 // False-colour diagnostic: OKLCh with error as lightness.
