@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <print>
 #include <regex>
@@ -11,7 +13,10 @@ static long long ms() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+#include <opencv2/imgproc.hpp>
+
 #include "blend.h"
+#include "colors.h"
 #include "seam.h"
 #include "tiff_io.h"
 
@@ -48,7 +53,7 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -o / --output    output TIFF");
     std::println(stderr, "  -f WxH+X+Y       force canvas geometry (enblend compat, no space ok)");
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
-    std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz)");
+    std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
     std::println(stderr, "  -w -v            accepted and ignored (enblend compat)");
 }
 
@@ -239,6 +244,71 @@ static cv::Mat buildLabelMap(const std::vector<cv::Mat>& canvas_images,
     return label;
 }
 
+// Distinct BGRA colour per label index: label 0 → transparent; labels 1..N get
+// golden-angle hues in OkLCh at fixed L/C. Not pixel-identical to
+// tools/colorize_mask.py (which uses the toe-corrected OkLrCh via coloraide) —
+// a separate, equally-distinct palette built on the plain OkLCh in colors.h.
+static std::vector<cv::Vec4b> labelPalette(int N) {
+    constexpr float kGoldenDeg = 137.50776f;  // 180 * (3 - sqrt(5))
+    std::vector<cv::Vec4b> palette(N + 1, cv::Vec4b(0, 0, 0, 0));  // label 0 = transparent
+    const auto to8 = [](float v) {
+        return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    float hue = 0.0f;
+    for (int i = 1; i <= N; ++i) {
+        const color::Rgb c = color::okLabToRgb(color::okLchToLab({0.66f, 0.12f, hue}));
+        palette[i] = cv::Vec4b(to8(c.b), to8(c.g), to8(c.r), 255);  // BGRA
+        hue = std::fmod(hue + kGoldenDeg, 360.0f);
+    }
+    return palette;
+}
+
+// Map a label map (0=uncovered, 1..N=image index) to a BGRA image via the palette.
+static cv::Mat colorizeLabelMap(const cv::Mat& label, const std::vector<cv::Vec4b>& palette) {
+    const int N = static_cast<int>(palette.size()) - 1;
+    cv::Mat out(label.size(), CV_8UC4);
+    for (int y = 0; y < label.rows; ++y) {
+        const uint8_t* lbl = label.ptr<uint8_t>(y);
+        cv::Vec4b*     dst = out.ptr<cv::Vec4b>(y);
+        for (int x = 0; x < label.cols; ++x) {
+            const uint8_t v = lbl[x];
+            dst[x] = (v <= N) ? palette[v] : cv::Vec4b(0, 0, 0, 0);
+        }
+    }
+    return out;
+}
+
+// Render a legend keying the golden-angle palette to input names: each name is
+// drawn next to its colour swatch on an opaque black background.
+static cv::Mat renderLabelLegend(const std::vector<std::string>& names,
+                                 const std::vector<cv::Vec4b>& palette) {
+    constexpr int    kFont   = cv::FONT_HERSHEY_SIMPLEX;
+    constexpr double kScale  = 0.5;
+    constexpr int    kThick  = 1;
+    constexpr int    kPad    = 8, kSwatch = 16, kGap = 8, kRow = 24;
+
+    int maxTextW = 0, textH = 8;
+    for (const auto& n : names) {
+        int base = 0;
+        const cv::Size sz = cv::getTextSize(n, kFont, kScale, kThick, &base);
+        maxTextW = std::max(maxTextW, sz.width);
+        textH    = std::max(textH, sz.height);
+    }
+    const int W = kPad + kSwatch + kGap + maxTextW + kPad;
+    const int H = kPad + static_cast<int>(names.size()) * kRow + kPad;
+    cv::Mat out(H, W, CV_8UC4, cv::Scalar(0, 0, 0, 255));  // opaque black
+
+    for (size_t i = 0; i < names.size(); ++i) {
+        const cv::Vec4b col = palette[i + 1];
+        const cv::Scalar sc(col[0], col[1], col[2], 255);
+        const int y = kPad + static_cast<int>(i) * kRow;
+        cv::rectangle(out, cv::Rect(kPad, y, kSwatch, kSwatch), sc, cv::FILLED);
+        cv::putText(out, names[i], cv::Point(kPad + kSwatch + kGap, y + (kSwatch + textH) / 2),
+                    kFont, kScale, sc, kThick, cv::LINE_AA);
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -371,6 +441,21 @@ int main(int argc, char** argv) {
     t0 = ms();
     const cv::Mat label_map = buildLabelMap(canvas_images, pairs, seam_masks, canvas);
     std::println("  label map:    {:6} ms", ms() - t0);
+
+    if (opts.seam_verbose) {
+        t0 = ms();
+        const std::vector<cv::Vec4b> palette = labelPalette(N);
+        tiffio::writeTiff("labelmap_viz.tif", colorizeLabelMap(label_map, palette));
+
+        std::vector<std::string> names;
+        names.reserve(images.size());
+        for (const auto& im : images) {
+            const auto slash = im.path.find_last_of("/\\");
+            names.push_back(slash == std::string::npos ? im.path : im.path.substr(slash + 1));
+        }
+        tiffio::writeTiff("labelmap_legend.tif", renderLabelLegend(names, palette));
+        std::println("  label verbose:{:6} ms  (labelmap_viz.tif, labelmap_legend.tif)", ms() - t0);
+    }
 
     // --- SeamMaskOnly: write and exit ---
     if (!opts.seam_mask_only.empty()) {

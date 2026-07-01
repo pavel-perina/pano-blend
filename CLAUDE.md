@@ -33,7 +33,9 @@ blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
   (may be negative; `tiffio::kNoPos` = INT_MIN is the "not specified" sentinel)
 - `-f WxH+X+Y` — canvas geometry; offsets may be negative (`-12` or `+-12` style)
 - `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit
-- `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images)
+- `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images),
+  plus `labelmap_viz.tif` (label map colorized via a golden-angle OkLCh palette)
+  and `labelmap_legend.tif` (swatch + input filename key for that palette)
 - `-w`, `-v` accepted and ignored (enblend compat)
 - SmartBlend flags (`-DER`, `-DEC`, `-MinSize`, etc.) accepted with warning
 
