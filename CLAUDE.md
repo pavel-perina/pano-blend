@@ -104,6 +104,29 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 
 ## What's next
 
+### Known limitation to address: all-pairs label map is incoherent in 3+ overlaps
+`main.cpp` seams **every** bounding-box-overlapping pair (N(N-1)/2 = 10 for the
+5-frame test) and merges the binary masks in `buildLabelMap`. Two problems:
+- **Wasteful**: for a row panorama only spatially-adjacent pairs matter (~N-1);
+  the rest are redundant seams. perf (2026-07, RelWithDebInfo, 5× X100V) shows
+  `seam::graphCut` self ≈ 35% of CPU and it is the wall-clock hotspot — that cost
+  is paid once per pair, so fewer pairs ≈ linear speedup on the seam phase.
+- **Error-blind & order-dependent**: `buildLabelMap` keeps no ΔE. Priority is pure
+  image index (lowest-index init, then pairs applied in fixed `(0,1)…(3,4)` order,
+  later overriding). 2-image overlaps come out exact (the single seam *is* the
+  answer), but 3+-image overlaps are resolved by an arbitrary index-ordered cascade
+  of mutually-independent binary seams that need not meet consistently at the triple
+  point — **not** the minimum-error partition.
+- **Fix (both at once)**: switch to SmartBlend's **sequential pairwise** model —
+  seam image k against the accumulated composite of 0..k-1 (N-1 seams, decisions
+  always made against everything already placed, so no independent-pairwise masks
+  to reconcile). This is also what the RE found (`08_FinalArchitecture.md`:
+  "strictly pairwise sequential"). Requires reworking `buildLabelMap` + the N-way
+  `multiBandBlend` into an accumulating composite; results become input-order
+  dependent (as enblend's are). A cheaper interim step is pruning non-adjacent
+  pairs by opaque-overlap area, but that only fixes the waste, not the incoherence,
+  and is only safe when the "between" image always covers the non-adjacent overlap.
+
 ### Performance (next wins, in order)
 1. **Band-only graph vertices**: fine-pass `graphCut` still allocates a vertex per
    crop pixel; an index-remap of band pixels would shrink the BK graph ~10×.
