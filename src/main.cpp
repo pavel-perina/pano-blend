@@ -20,6 +20,11 @@ static long long ms() {
 #include "seam.h"
 #include "tiff_io.h"
 
+// Injected by CMake from `git describe`; "unknown" if git/.git is unavailable.
+#ifndef BLEND_VERSION
+#define BLEND_VERSION "unknown"
+#endif
+
 // ---------------------------------------------------------------------------
 // CLI parser
 // ---------------------------------------------------------------------------
@@ -55,6 +60,7 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
     std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
     std::println(stderr, "  -w -v            accepted and ignored (enblend compat)");
+    std::println(stderr, "  --version        print version and exit");
 }
 
 // Options that consume one extra argument (value).
@@ -109,7 +115,10 @@ static Options parseArgs(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
 
-        if (a == "-o" || a == "--output") {
+        if (a == "-version" || a == "--version") {
+            std::println("pano-blend {}", BLEND_VERSION);
+            std::exit(0);
+        } else if (a == "-o" || a == "--output") {
             if (i + 1 >= argc) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
             opts.output = argv[++i];
         } else if (a == "-xoff") {

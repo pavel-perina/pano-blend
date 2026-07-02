@@ -8,8 +8,24 @@ find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc imgcodecs stitching)
 find_package(TIFF REQUIRED)
 
+# Version string from `git describe`; falls back to "unknown" when git or the
+# .git directory is unavailable (e.g. a source-archive build). Evaluated at
+# configure time.
+set(BLEND_VERSION "unknown")
+find_package(Git QUIET)
+if(Git_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --dirty --always
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE BLEND_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+message(STATUS "pano-blend version: ${BLEND_VERSION}")
+
 add_executable(blend src/main.cpp src/colors.cpp src/seam.cpp src/blend.cpp src/tiff_io.cpp)
 target_include_directories(blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
+target_compile_definitions(blend PRIVATE BLEND_VERSION="${BLEND_VERSION}")
 target_link_libraries(blend PRIVATE ${OpenCV_LIBS} TIFF::TIFF)
 
 add_executable(tag_tiff tools/tag_tiff.c)
