@@ -25,9 +25,9 @@ fails there, link `opencv::opencv_core` etc. directly.
 
 ## CLI
 ```
-blend img1.tif img2.tif [img3.tif ...] -o out.tif
-blend img1.tif img2.tif -SeamMaskOnly mask.tif   # label map only, no blending
-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
+pano-blend img1.tif img2.tif [img3.tif ...] -o out.tif
+pano-blend img1.tif img2.tif -SeamMaskOnly mask.tif   # label map only, no blending
+pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 ```
 - Image positions read from TIFF tags (XPOSITION/YPOSITION), or `-xoff`/`-yoff`
   (may be negative; `tiffio::kNoPos` = INT_MIN is the "not specified" sentinel)

@@ -21,8 +21,8 @@ static long long ms() {
 #include "tiff_io.h"
 
 // Injected by CMake from `git describe`; "unknown" if git/.git is unavailable.
-#ifndef BLEND_VERSION
-#define BLEND_VERSION "unknown"
+#ifndef PANOBLEND_VERSION
+#define PANOBLEND_VERSION "unknown"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ static Options parseArgs(int argc, char** argv) {
         std::string a = argv[i];
 
         if (a == "-version" || a == "--version") {
-            std::println("pano-blend {}", BLEND_VERSION);
+            std::println("pano-blend {}", PANOBLEND_VERSION);
             std::exit(0);
         } else if (a == "-o" || a == "--output") {
             if (i + 1 >= argc) { std::println(stderr, "{}: requires argument", a); std::exit(1); }

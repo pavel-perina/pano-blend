@@ -48,21 +48,21 @@ ctest --test-dir build                            # optional: run the tests
 
 ```sh
 # Blend two or more positioned TIFF layers into one panorama
-blend img1.tif img2.tif [img3.tif ...] -o pano.tif
+pano-blend img1.tif img2.tif [img3.tif ...] -o pano.tif
 ```
 
 The repo ships two small overlapping test frames, so you can try it immediately
 after building (`p2` is placed at x=85 over `p1`):
 
 ```sh
-blend test-data/p1.tif test-data/p2.tif -o pano.tif
+pano-blend test-data/p1.tif test-data/p2.tif -o pano.tif
 ```
 
 Image positions are read from each TIFF's `XPOSITION`/`YPOSITION` tags, or given
 explicitly with `-xoff`/`-yoff` (offsets may be negative):
 
 ```sh
-blend left.tif right.tif -xoff 850 -yoff 0 -o pano.tif
+pano-blend left.tif right.tif -xoff 850 -yoff 0 -o pano.tif
 ```
 
 | Option | Meaning |
@@ -77,7 +77,7 @@ blend left.tif right.tif -xoff 850 -yoff 0 -o pano.tif
 
 `pano-blend` is a blender, not a stitcher — it needs pre-warped, positioned
 layers, which is exactly what Hugin's `nona` produces. The full workflow
-(`nona -m TIFF_m` → `blend`) is in
+(`nona -m TIFF_m` → `pano-blend`) is in
 [`doc/hugin-workflow.md`](doc/hugin-workflow.md).
 
 ## Status

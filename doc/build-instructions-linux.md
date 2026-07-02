@@ -21,7 +21,7 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 # CMake build (use `build` directory)
 cmake --build build
 # Test, prints usage
-build/blend
+build/pano-blend
 ```
 
 `Release` (`-O3 -DNDEBUG`) is the default for a fast, small binary. Use
