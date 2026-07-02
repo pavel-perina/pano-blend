@@ -115,5 +115,4 @@ it, be aware of the flag handling:
 
 Any enblend option not in the honored set is either ignored or warned about, so
 the blend will run but will not act on those settings. Treat the result as
-"enblend-compatible enough to invoke," not "feature-equivalent to enblend," until
-a full GUI round-trip has been confirmed.
+"enblend-compatible enough to invoke," not "feature-equivalent to enblend".

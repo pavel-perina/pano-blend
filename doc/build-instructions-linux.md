@@ -1,10 +1,12 @@
-# Building on Linux (openSUSE Tumbleweed)
+# Building on Linux
 
 ## Prerequisites
 
+* git
 * gcc or clang compiler
 * CMake
-* `sudo zypper in libtiff-devel opencv-devel gtest`
+* `sudo zypper in libtiff-devel opencv-devel gtest` (openSUSE Tumbleweed)
+* `sudo dnf in libtiff-devel opencv-devel gtest-devel` (Fedora 44)
 
 ## Build instructions (dynamic linking)
 
