@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(pano-blend C CXX)
+project(pano-blend VERSION 1.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,7 +23,18 @@ if(Git_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
 endif()
 message(STATUS "pano-blend version: ${PANOBLEND_VERSION}")
 
-add_executable(pano-blend src/main.cpp src/colors.cpp src/seam.cpp src/blend.cpp src/tiff_io.cpp)
+set(PANOBLEND_SOURCES src/main.cpp src/colors.cpp src/seam.cpp src/blend.cpp src/tiff_io.cpp)
+
+# Windows: embed a VERSIONINFO resource so the .exe carries product name,
+# version, copyright and origin URL (visible in Explorer > Properties > Details).
+# Only compiled on WIN32; the Linux build is untouched.
+if(WIN32)
+    configure_file(${CMAKE_SOURCE_DIR}/pano-blend.rc.in
+                   ${CMAKE_BINARY_DIR}/pano-blend.rc @ONLY)
+    list(APPEND PANOBLEND_SOURCES ${CMAKE_BINARY_DIR}/pano-blend.rc)
+endif()
+
+add_executable(pano-blend ${PANOBLEND_SOURCES})
 target_include_directories(pano-blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
 target_compile_definitions(pano-blend PRIVATE PANOBLEND_VERSION="${PANOBLEND_VERSION}")
 target_link_libraries(pano-blend PRIVATE ${OpenCV_LIBS} TIFF::TIFF)

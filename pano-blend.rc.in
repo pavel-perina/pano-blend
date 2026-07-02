@@ -1,0 +1,35 @@
+// Windows VERSIONINFO resource for pano-blend.
+// Generated from pano-blend.rc.in by CMake (configure_file, @ONLY).
+// Numeric fields come from project() VERSION; string fields carry the
+// human-readable `git describe` version so the exe records its exact build.
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION    @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+    PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+    FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
+    FILEFLAGS      0
+    FILEOS         VOS__WINDOWS32
+    FILETYPE       VFT_APP
+    FILESUBTYPE    VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"  // U.S. English, Unicode
+        BEGIN
+            VALUE "CompanyName",      "Pavel Perina"
+            VALUE "FileDescription",  "Panoramic image blender - graph-cut seams + multi-band blend"
+            VALUE "FileVersion",      "@PANOBLEND_VERSION@"
+            VALUE "InternalName",     "pano-blend"
+            VALUE "LegalCopyright",   "MIT License. Copyright (c) 2026 Pavel Perina"
+            VALUE "OriginalFilename", "pano-blend.exe"
+            VALUE "ProductName",      "pano-blend"
+            VALUE "ProductVersion",   "@PANOBLEND_VERSION@"
+            VALUE "Comments",         "https://github.com/pavel-perina/pano-blend"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200  // U.S. English, Unicode (0x4b0)
+    END
+END

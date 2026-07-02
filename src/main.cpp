@@ -117,6 +117,8 @@ static Options parseArgs(int argc, char** argv) {
 
         if (a == "-version" || a == "--version") {
             std::println("pano-blend {}", PANOBLEND_VERSION);
+            std::println("https://github.com/pavel-perina/pano-blend");
+            std::println("MIT License");
             std::exit(0);
         } else if (a == "-o" || a == "--output") {
             if (i + 1 >= argc) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
