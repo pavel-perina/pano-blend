@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Colorize a label map TIFF into a palette (indexed) TIFF.
-
-Usage: colorize_mask.py input_mask.tif output.tif
-
-Label 0 (no image) is transparent black.
-Labels 1..N get distinct colours from an OkLrCh golden-angle palette.
-"""
+# Colorize a label map TIFF into a palette (indexed) TIFF.
+#
+# Usage: colorize_mask.py input_mask.tif output.tif
+#
+# Label 0 (no image) is transparent black.
+# Labels 1..N get distinct colours from an OkLrCh golden-angle palette.
+#
+# /// script
+# dependencies = [ "tifffile", "numpy", "coloraide" ]
+# ///
 
 import sys
 import numpy as np
