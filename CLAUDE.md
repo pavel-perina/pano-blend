@@ -104,28 +104,15 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 
 ## What's next
 
-### Known limitation to address: all-pairs label map is incoherent in 3+ overlaps
-`main.cpp` seams **every** bounding-box-overlapping pair (N(N-1)/2 = 10 for the
-5-frame test) and merges the binary masks in `buildLabelMap`. Two problems:
-- **Wasteful**: for a row panorama only spatially-adjacent pairs matter (~N-1);
-  the rest are redundant seams. perf (2026-07, RelWithDebInfo, 5× X100V) shows
-  `seam::graphCut` self ≈ 35% of CPU and it is the wall-clock hotspot — that cost
-  is paid once per pair, so fewer pairs ≈ linear speedup on the seam phase.
-- **Error-blind & order-dependent**: `buildLabelMap` keeps no ΔE. Priority is pure
-  image index (lowest-index init, then pairs applied in fixed `(0,1)…(3,4)` order,
-  later overriding). 2-image overlaps come out exact (the single seam *is* the
-  answer), but 3+-image overlaps are resolved by an arbitrary index-ordered cascade
-  of mutually-independent binary seams that need not meet consistently at the triple
-  point — **not** the minimum-error partition.
-- **Fix (both at once)**: switch to SmartBlend's **sequential pairwise** model —
-  seam image k against the accumulated composite of 0..k-1 (N-1 seams, decisions
-  always made against everything already placed, so no independent-pairwise masks
-  to reconcile). This is also what the RE found (`08_FinalArchitecture.md`:
-  "strictly pairwise sequential"). Requires reworking `buildLabelMap` + the N-way
-  `multiBandBlend` into an accumulating composite; results become input-order
-  dependent (as enblend's are). A cheaper interim step is pruning non-adjacent
-  pairs by opaque-overlap area, but that only fixes the waste, not the incoherence,
-  and is only safe when the "between" image always covers the non-adjacent overlap.
+### Sequential label map + large-panorama / tiled blend → `doc/large-panorama-plan.md`
+Current bug/limitation: `buildLabelMap` seams **every** bounding-box-overlapping
+pair (N(N-1)/2) and merges independent binary masks — wasteful, and **incoherent at
+3+-image overlaps** (order-dependent, keeps no ΔE, triple points need not meet). Fix
+= a **sequential-accumulate label map** (one frozen order, N-1 cuts; the label map is
+the *memo* of the sequential cuts). That, plus the tiled large-canvas executor
+(apron tiles, global label map, pyramidal BigTIFF, ordering heuristic), is fully
+designed in **`doc/large-panorama-plan.md`**. Phase 1 there also fixes the
+incoherence in the current small-pano path, so it's the first thing to build.
 
 ### Performance (next wins, in order)
 1. **Band-only graph vertices**: fine-pass `graphCut` still allocates a vertex per
@@ -141,14 +128,10 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 2. **High-pass delta** — `-HiPassLevel 4` means sigma = overlapWidth/16 Gaussian.
    Do not implement without RE confirmation of exact formula.
 
-### SEM pipeline (future)
-- **Grayscale + 16-bit support**: SEM images are grayscale 16-bit.
-  Need to handle CV_16UC1/CV_16UC2 on load, convert to float internally.
-  For SEM (linear, no colour) use intensity diff instead of OKLab.
-- **Large grid stitching**: 300×300 images → 90 Gpixel canvas.
-  Architecture: global seam finding (lightweight), tiled/strip-based blending.
-  `-SeamMaskOnly` enables external orchestration — call pairwise, collect masks,
-  reconstruct output in tiles with a separate tool.
+### SEM / large-grid (future)
+Grayscale 16-bit load (`CV_16UC1/2` → float, intensity diff instead of OKLab) and
+the tiled multi-gigapixel path are covered in `doc/large-panorama-plan.md` (Phase 0
+prereqs + Phases 3–4). SEM specifics are kept out of the repo docs on purpose.
 
 ## SmartBlend RE findings
 - **Seam finding**: BK graph-cut, pairwise, with coarse-to-fine multi-scale search.
