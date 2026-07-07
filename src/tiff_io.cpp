@@ -184,14 +184,18 @@ cv::Mat placeOnCanvas(const TiffImage& img, cv::Size canvas) {
 }
 
 void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
-    // Convert to 8-bit
+    // CV_32F [0,1] → 8-bit; CV_8U/CV_16U pass through at their native depth
+    // (16-bit is used for label maps with more than 255 images).
     cv::Mat u8;
     if (mat.depth() == CV_32F)
         mat.convertTo(u8, CV_8U, 255.0);
-    else
+    else if (mat.depth() == CV_8U || mat.depth() == CV_16U)
         u8 = mat;
+    else
+        throw std::runtime_error("writeTiff: unsupported depth (want 8U/16U/32F): " + path);
 
-    const int ch = u8.channels();
+    const int ch   = u8.channels();
+    const int bits = (u8.depth() == CV_16U) ? 16 : 8;
 
     // OpenCV stores color as BGR(A); TIFF expects RGB(A) — swap for multi-channel.
     if (ch == 4)
@@ -206,7 +210,7 @@ void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
     TIFFSetField(tif, TIFFTAG_IMAGEWIDTH,      static_cast<uint32_t>(u8.cols));
     TIFFSetField(tif, TIFFTAG_IMAGELENGTH,     static_cast<uint32_t>(u8.rows));
     TIFFSetField(tif, TIFFTAG_SAMPLESPERPIXEL, static_cast<uint16_t>(ch));
-    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(8));
+    TIFFSetField(tif, TIFFTAG_BITSPERSAMPLE,   static_cast<uint16_t>(bits));
     TIFFSetField(tif, TIFFTAG_PHOTOMETRIC,     ch >= 3 ? PHOTOMETRIC_RGB : PHOTOMETRIC_MINISBLACK);
     TIFFSetField(tif, TIFFTAG_COMPRESSION,     COMPRESSION_ADOBE_DEFLATE);
     TIFFSetField(tif, TIFFTAG_ZIPQUALITY,      compression);

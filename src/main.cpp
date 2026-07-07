@@ -280,15 +280,17 @@ static cv::Mat buildLabelMap(const std::vector<cv::Mat>& canvas_images,
                              cv::Size canvas) {
     const int N = static_cast<int>(canvas_images.size());
 
-    // Initialize: assign each pixel to the first image that covers it
-    cv::Mat label(canvas, CV_8UC1, cv::Scalar(0));
+    // Initialize: assign each pixel to the first image that covers it.
+    // 16-bit labels: up to 65535 images (uint8 wrapped at 256+ and silently
+    // dropped those images' territory).
+    cv::Mat label(canvas, CV_16UC1, cv::Scalar(0));
     for (int i = 0; i < N; ++i) {
         for (int y = 0; y < canvas.height; ++y) {
             const cv::Vec4f* row = canvas_images[i].ptr<cv::Vec4f>(y);
-            uint8_t*         lbl = label.ptr<uint8_t>(y);
+            uint16_t*        lbl = label.ptr<uint16_t>(y);
             for (int x = 0; x < canvas.width; ++x) {
                 if (row[x][3] > 0.5f && lbl[x] == 0)
-                    lbl[x] = static_cast<uint8_t>(i + 1);
+                    lbl[x] = static_cast<uint16_t>(i + 1);
             }
         }
     }
@@ -302,11 +304,11 @@ static cv::Mat buildLabelMap(const std::vector<cv::Mat>& canvas_images,
 
         for (int y = 0; y < canvas.height; ++y) {
             const uint8_t* rm  = mask.ptr<uint8_t>(y);
-            uint8_t*       lbl = label.ptr<uint8_t>(y);
+            uint16_t*      lbl = label.ptr<uint16_t>(y);
             for (int x = 0; x < canvas.width; ++x) {
                 // Only modify pixels that belong to one of the two images in this pair
                 if (lbl[x] != img_i && lbl[x] != img_j) continue;
-                lbl[x] = (rm[x] == 0) ? img_i : img_j;
+                lbl[x] = static_cast<uint16_t>((rm[x] == 0) ? img_i : img_j);
             }
         }
     }
@@ -338,10 +340,10 @@ static cv::Mat colorizeLabelMap(const cv::Mat& label, const std::vector<cv::Vec4
     const int N = static_cast<int>(palette.size()) - 1;
     cv::Mat out(label.size(), CV_8UC4);
     for (int y = 0; y < label.rows; ++y) {
-        const uint8_t* lbl = label.ptr<uint8_t>(y);
-        cv::Vec4b*     dst = out.ptr<cv::Vec4b>(y);
+        const uint16_t* lbl = label.ptr<uint16_t>(y);
+        cv::Vec4b*      dst = out.ptr<cv::Vec4b>(y);
         for (int x = 0; x < label.cols; ++x) {
-            const uint8_t v = lbl[x];
+            const uint16_t v = lbl[x];
             dst[x] = (v <= N) ? palette[v] : cv::Vec4b(0, 0, 0, 0);
         }
     }
@@ -392,6 +394,11 @@ int main(int argc, char** argv) {
         std::println(stderr, "error: at least 2 input images required (got {})",
                      opts.inputs.size());
         usage(argv[0]);
+        return 1;
+    }
+    if (opts.inputs.size() > 65535) {  // 16-bit label map
+        std::println(stderr, "error: at most 65535 input images supported (got {})",
+                     opts.inputs.size());
         return 1;
     }
     if (opts.output.empty() && opts.seam_mask_only.empty()) {

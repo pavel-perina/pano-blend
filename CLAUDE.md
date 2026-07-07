@@ -32,7 +32,8 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 - Image positions read from TIFF tags (XPOSITION/YPOSITION), or `-xoff`/`-yoff`
   (may be negative; `tiffio::kNoPos` = INT_MIN is the "not specified" sentinel)
 - `-f WxH+X+Y` — canvas geometry; offsets may be negative (`-12` or `+-12` style)
-- `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit
+- `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit;
+  16-bit gray TIFF (CV_16UC1 label map ⇒ up to 65535 images, guarded in main)
 - `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images),
   plus `labelmap_viz.tif` (label map colorized via a golden-angle OkLCh palette)
   and `labelmap_legend.tif` (swatch + input filename key for that palette)
@@ -92,7 +93,9 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 ## Test data
 - `test-data/p1.tif`, `p2.tif` — 405×240 8-bit RGBA (loaded as float internally);
   p2 starts at x=85
-- `test-data/mask.tif`, `mask_viz.tif` — label map from 2-image seam
+- `test-data/mask.tif`, `mask_viz.tif` — label map from 2-image seam (stale:
+  8-bit, from an older seam version; current code emits 16-bit and a slightly
+  different seam)
 - Large test: 3× DSCF photos (5000×3000 each) → 9784×4396 canvas, ~26s
   (pre-optimization figure — re-measure)
 - Perf baseline (2026-06, sandbox): 2× 5000×3000, 1200px noisy overlap:

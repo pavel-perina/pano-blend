@@ -53,8 +53,9 @@ def main():
     print(f"Mask: {mask.shape[1]}x{mask.shape[0]}, labels 0..{max_label}")
 
     # Build RGBA palette: label 0 = transparent, labels 1..N = colours
+    # (sized to the labels actually present — masks may be 8- or 16-bit)
     palette = make_palette(max_label)
-    rgba_palette = np.zeros((256, 4), dtype=np.uint8)
+    rgba_palette = np.zeros((max_label + 1, 4), dtype=np.uint8)
     for i in range(max_label):
         rgba_palette[i + 1, :3] = palette[i]
         rgba_palette[i + 1, 3] = 255
