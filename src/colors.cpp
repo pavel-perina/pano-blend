@@ -231,6 +231,16 @@ Rgb okLabToRgb(const OkLab& lab)
 }
 
 
+Rgb8 rgb8FromOkLch(const OkLch& lch)
+{
+    const Rgb rgb = okLabToRgb(okLchToLab(lch));
+    const auto to8 = [](float v) {
+        return static_cast<uint8_t>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+    };
+    return { to8(rgb.r), to8(rgb.g), to8(rgb.b) };
+}
+
+
 std::vector<Rgb> gradientCieLch(const Rgb& startRgb, const Rgb& endRgb, std::size_t length)
 {
     if (length == 0)

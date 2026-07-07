@@ -350,12 +350,8 @@ cv::Mat visualizeSeam(const cv::Mat& f1, const cv::Mat& f2,
                 H = in1 ? kH1 : kH2;
             }
 
-            const auto lab = color::okLchToLab({L, kC, H});
-            const auto rgb = color::okLabToRgb(lab);
-            const uint8_t R = static_cast<uint8_t>(std::clamp(rgb.r, 0.0f, 1.0f) * 255.0f);
-            const uint8_t G = static_cast<uint8_t>(std::clamp(rgb.g, 0.0f, 1.0f) * 255.0f);
-            const uint8_t B = static_cast<uint8_t>(std::clamp(rgb.b, 0.0f, 1.0f) * 255.0f);
-            ro[x] = {B, G, R, 255};
+            const color::Rgb8 c = color::rgb8FromOkLch({L, kC, H});
+            ro[x] = {c.b, c.g, c.r, 255};
         }
     }
     return out;

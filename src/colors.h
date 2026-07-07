@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 /***************************************************************************
@@ -31,6 +32,9 @@ namespace color {
     // NOTE: in range 0..1
     struct Rgb    { float r, g, b; };
 
+    // NOTE: 8-bit sRGB (gamut-clipped, rounded to nearest)
+    struct Rgb8   { uint8_t r, g, b; };
+
     // NOTE: L 0..100
     struct CieLab { float L, a, b; };
     struct CieLch { float L, C, H; };
@@ -50,6 +54,10 @@ namespace color {
     extern OkLch  okLabToLch(const OkLab& lab);
     extern OkLab  okLabFromRgb(const Rgb& rgb);
     extern Rgb    okLabToRgb(const OkLab& lab);
+
+    // OkLCh → 8-bit sRGB in one step (clamp to [0,1], round to nearest).
+    // Shared by the seam/label-map visualizations so their quantization agrees.
+    extern Rgb8   rgb8FromOkLch(const OkLch& lch);
 
     // ==== Gradient Functions ============================================
 
