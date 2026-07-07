@@ -14,15 +14,24 @@ namespace blend {
 // darkens the valid pixels beside it (the dark halo where a seam meets an
 // image's transparent edge).  These hole pixels are masked out of the blend
 // weight, so their value only needs to match the boundary instead of black.
-static void fillHoles(cv::Mat& bgr, const cv::Mat& present) {
+//
+// Only holes within `band` px of a valid pixel can bleed into the pyramid
+// (reach ≈ 4·2^num_bands px — see call site), and the nearest valid pixel to
+// a hole always borders a hole, so the distance-transform sources are just
+// those boundary pixels: the colour table stays perimeter-sized instead of
+// one entry per valid pixel (hundreds of MB on large crops).
+static void fillHoles(cv::Mat& bgr, const cv::Mat& present, int band) {
     cv::Mat invalid;
     cv::bitwise_not(present, invalid);              // 255 at holes, 0 at valid
-    if (cv::countNonZero(invalid) == 0) return;
+    cv::Mat grown, boundary;
+    cv::dilate(invalid, grown, cv::Mat());          // 3x3: holes + 8-neighbours
+    cv::bitwise_and(grown, present, boundary);      // valid pixels bordering a hole
+    if (cv::countNonZero(boundary) == 0) return;    // no holes
 
-    // labels[hole] = label of the nearest valid (zero) pixel; each valid
-    // pixel gets its own label, so label → colour is a clean lookup.
-    cv::Mat dist, labels;
-    cv::distanceTransform(invalid, dist, labels, cv::DIST_L2, 3,
+    // labels[px] = label of the nearest boundary pixel, dist[px] in pixels.
+    cv::Mat not_boundary, dist, labels;
+    cv::bitwise_not(boundary, not_boundary);
+    cv::distanceTransform(not_boundary, dist, labels, cv::DIST_L2, 3,
                           cv::DIST_LABEL_PIXEL);
 
     double max_label = 0.0;
@@ -31,17 +40,18 @@ static void fillHoles(cv::Mat& bgr, const cv::Mat& present) {
 
     for (int y = 0; y < bgr.rows; ++y) {
         const int32_t*   lab = labels.ptr<int32_t>(y);
-        const uint8_t*   pr  = present.ptr<uint8_t>(y);
+        const uint8_t*   bnd = boundary.ptr<uint8_t>(y);
         const cv::Vec3f* px  = bgr.ptr<cv::Vec3f>(y);
         for (int x = 0; x < bgr.cols; ++x)
-            if (pr[x]) colour[lab[x]] = px[x];
+            if (bnd[x]) colour[lab[x]] = px[x];
     }
     for (int y = 0; y < bgr.rows; ++y) {
         const int32_t* lab = labels.ptr<int32_t>(y);
         const uint8_t* pr  = present.ptr<uint8_t>(y);
+        const float*   d   = dist.ptr<float>(y);
         cv::Vec3f*     px  = bgr.ptr<cv::Vec3f>(y);
         for (int x = 0; x < bgr.cols; ++x)
-            if (!pr[x]) px[x] = colour[lab[x]];
+            if (!pr[x] && d[x] <= static_cast<float>(band)) px[x] = colour[lab[x]];
     }
 }
 
@@ -77,7 +87,9 @@ cv::Mat multiBandBlend(const std::vector<cv::Mat>& images,
         // pixels with the nearest valid colour first (no black-halo bleed).
         cv::Mat bgr, bgr_16s;
         cv::cvtColor(images[i](roi), bgr, cv::COLOR_BGRA2BGR);
-        fillHoles(bgr, present(roi));
+        // Pyramid reach ≈ 4·2^num_bands px (radius-2 kernel accumulated across
+        // levels; 4× is empirically exact, 2× leaks). 8× = 2× safety margin.
+        fillHoles(bgr, present(roi), 8 << num_bands);
         bgr.convertTo(bgr_16s, CV_16SC3, 255.0);
 
         blender.feed(bgr_16s, mask(roi), roi.tl());
