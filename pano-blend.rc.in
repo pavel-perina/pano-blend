@@ -1,12 +1,12 @@
 // Windows VERSIONINFO resource for pano-blend.
-// Generated from pano-blend.rc.in by CMake (configure_file, @ONLY).
-// Numeric fields come from project() VERSION; string fields carry the
-// human-readable `git describe` version so the exe records its exact build.
+// Generated at build time from pano-blend.rc.in by cmake/GenerateVersion.cmake.
+// Both the numeric fields and the human-readable string come from
+// `git describe` — the tag is the single source of the version.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
-    FILEVERSION    @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
-    PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+    FILEVERSION    @PANOBLEND_VERSION_MAJOR@,@PANOBLEND_VERSION_MINOR@,@PANOBLEND_VERSION_PATCH@,0
+    PRODUCTVERSION @PANOBLEND_VERSION_MAJOR@,@PANOBLEND_VERSION_MINOR@,@PANOBLEND_VERSION_PATCH@,0
     FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
     FILEFLAGS      0
     FILEOS         VOS__WINDOWS32

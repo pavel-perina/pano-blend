@@ -21,7 +21,11 @@ static long long ms() {
 #include "seam.h"
 #include "tiff_io.h"
 
-// Injected by CMake from `git describe`; "unknown" if git/.git is unavailable.
+// version.h is generated at build time by cmake/GenerateVersion.cmake from
+// `git describe`; the fallback keeps non-CMake builds compiling.
+#if __has_include("version.h")
+#include "version.h"
+#endif
 #ifndef PANOBLEND_VERSION
 #define PANOBLEND_VERSION "unknown"
 #endif

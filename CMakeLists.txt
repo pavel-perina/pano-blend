@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(pano-blend VERSION 1.1.0 LANGUAGES C CXX)
+project(pano-blend LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,35 +8,37 @@ find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc imgcodecs stitching)
 find_package(TIFF REQUIRED)
 
-# Version string from `git describe`; falls back to "unknown" when git or the
-# .git directory is unavailable (e.g. a source-archive build). Evaluated at
-# configure time.
-set(PANOBLEND_VERSION "unknown")
-find_package(Git QUIET)
-if(Git_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} describe --tags --dirty --always
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        OUTPUT_VARIABLE PANOBLEND_VERSION
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-endif()
-message(STATUS "pano-blend version: ${PANOBLEND_VERSION}")
-
 set(PANOBLEND_SOURCES src/main.cpp src/colors.cpp src/seam.cpp src/blend.cpp src/tiff_io.cpp)
 
-# Windows: embed a VERSIONINFO resource so the .exe carries product name,
-# version, copyright and origin URL (visible in Explorer > Properties > Details).
-# Only compiled on WIN32; the Linux build is untouched.
+# Version comes solely from `git describe` ("unknown" fallback), regenerated on
+# every build by cmake/GenerateVersion.cmake so incremental builds never embed
+# a stale hash. It produces generated/version.h and, on Windows, the
+# VERSIONINFO resource (product name, version, copyright, origin URL — visible
+# in Explorer > Properties > Details) with numeric fields parsed from the tag.
+find_package(Git QUIET)
+set(PANOBLEND_VERSION_HEADER ${CMAKE_BINARY_DIR}/generated/version.h)
+set(version_args
+    -DSRC_DIR=${CMAKE_SOURCE_DIR}
+    -DOUT_HEADER=${PANOBLEND_VERSION_HEADER}
+    -DGIT_EXECUTABLE=${GIT_EXECUTABLE})
+set(version_byproducts ${PANOBLEND_VERSION_HEADER})
 if(WIN32)
-    configure_file(${CMAKE_SOURCE_DIR}/pano-blend.rc.in
-                   ${CMAKE_BINARY_DIR}/pano-blend.rc @ONLY)
-    list(APPEND PANOBLEND_SOURCES ${CMAKE_BINARY_DIR}/pano-blend.rc)
+    list(APPEND version_args
+        -DRC_IN=${CMAKE_SOURCE_DIR}/pano-blend.rc.in
+        -DRC_OUT=${CMAKE_BINARY_DIR}/generated/pano-blend.rc)
+    list(APPEND version_byproducts ${CMAKE_BINARY_DIR}/generated/pano-blend.rc)
+    list(APPEND PANOBLEND_SOURCES ${CMAKE_BINARY_DIR}/generated/pano-blend.rc)
 endif()
+add_custom_target(generate_version
+    COMMAND ${CMAKE_COMMAND} ${version_args}
+            -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersion.cmake
+    BYPRODUCTS ${version_byproducts}
+    COMMENT "Refreshing version from git describe")
 
 add_executable(pano-blend ${PANOBLEND_SOURCES})
-target_include_directories(pano-blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
-target_compile_definitions(pano-blend PRIVATE PANOBLEND_VERSION="${PANOBLEND_VERSION}")
+add_dependencies(pano-blend generate_version)
+target_include_directories(pano-blend PRIVATE ${OpenCV_INCLUDE_DIRS} src
+                           ${CMAKE_BINARY_DIR}/generated)
 target_link_libraries(pano-blend PRIVATE ${OpenCV_LIBS} TIFF::TIFF)
 
 add_executable(tag_tiff tools/tag_tiff.c)
