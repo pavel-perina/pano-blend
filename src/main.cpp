@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <print>
 #include <regex>
 #include <string>
@@ -59,7 +60,9 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -f WxH+X+Y       force canvas geometry (enblend compat, no space ok)");
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
     std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
-    std::println(stderr, "  -w -v            accepted and ignored (enblend compat)");
+    std::println(stderr, "  @file            read arguments from a response file, one per line");
+    std::println(stderr, "  -w [MODE]        wrap mode; accepted, wrap blending not implemented");
+    std::println(stderr, "  -v               accepted and ignored (enblend compat)");
     std::println(stderr, "  --version        print version and exit");
 }
 
@@ -73,6 +76,42 @@ static bool isValueOpt(const std::string& s) {
     for (int i = 0; kValueOpts[i]; ++i)
         if (s == kValueOpts[i]) return true;
     return false;
+}
+
+// enblend wrap modes (-w [MODE] / --wrap[=MODE]). A following argument is
+// consumed as the mode only when it matches one of these, so `-w img2.tif`
+// keeps img2.tif as an input.
+static bool isWrapMode(const std::string& s) {
+    return s == "none" || s == "open" || s == "horizontal" ||
+           s == "vertical" || s == "both" || s == "all";
+}
+
+// enblend-compatible response files: an argument `@list.txt` names a file with
+// one argument per line ('#' lines are comments; a line may nest another
+// @file). Hugin uses these to dodge the Windows command-line length limit on
+// projects with many images, so files may be CRLF-terminated.
+static void expandArg(const std::string& arg, std::vector<std::string>& out, int depth) {
+    if (arg.size() < 2 || arg[0] != '@') {
+        out.push_back(arg);
+        return;
+    }
+    if (depth >= 5) {
+        std::println(stderr, "error: response files nested deeper than 5 levels at '{}'", arg);
+        std::exit(1);
+    }
+    const std::string path = arg.substr(1);
+    std::ifstream f(path);
+    if (!f) {
+        std::println(stderr, "error: cannot open response file '{}'", path);
+        std::exit(1);
+    }
+    std::string line;
+    while (std::getline(f, line)) {
+        const size_t first = line.find_first_not_of(" \t\r");
+        const size_t last  = line.find_last_not_of(" \t\r");
+        if (first == std::string::npos || line[first] == '#') continue;
+        expandArg(line.substr(first, last - first + 1), out, depth + 1);
+    }
 }
 
 // Parse an integer option value; exits with a clear message instead of an
@@ -112,8 +151,12 @@ static Options parseArgs(int argc, char** argv) {
     int     pending_xoff = tiffio::kNoPos;
     int     pending_yoff = tiffio::kNoPos;
 
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
+    std::vector<std::string> args;
+    for (int i = 1; i < argc; ++i)
+        expandArg(argv[i], args, 0);
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
 
         if (a == "-version" || a == "--version") {
             std::println("pano-blend {}", PANOBLEND_VERSION);
@@ -121,18 +164,18 @@ static Options parseArgs(int argc, char** argv) {
             std::println("MIT License");
             std::exit(0);
         } else if (a == "-o" || a == "--output") {
-            if (i + 1 >= argc) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
-            opts.output = argv[++i];
+            if (i + 1 >= args.size()) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
+            opts.output = args[++i];
         } else if (a == "-xoff") {
-            if (i + 1 >= argc) { std::println(stderr, "-xoff: requires argument"); std::exit(1); }
-            pending_xoff = parseInt("-xoff", argv[++i]);
+            if (i + 1 >= args.size()) { std::println(stderr, "-xoff: requires argument"); std::exit(1); }
+            pending_xoff = parseInt("-xoff", args[++i]);
             if (!opts.inputs.empty()) {
                 opts.inputs.back().xoff = pending_xoff;
                 pending_xoff = tiffio::kNoPos;
             }
         } else if (a == "-yoff") {
-            if (i + 1 >= argc) { std::println(stderr, "-yoff: requires argument"); std::exit(1); }
-            pending_yoff = parseInt("-yoff", argv[++i]);
+            if (i + 1 >= args.size()) { std::println(stderr, "-yoff: requires argument"); std::exit(1); }
+            pending_yoff = parseInt("-yoff", args[++i]);
             if (!opts.inputs.empty()) {
                 opts.inputs.back().yoff = pending_yoff;
                 pending_yoff = tiffio::kNoPos;
@@ -143,8 +186,8 @@ static Options parseArgs(int argc, char** argv) {
             // -f WxH+X+Y  or  -fWxH+X+Y (no space)
             std::string geom_str;
             if (a == "-f") {
-                if (i + 1 >= argc) { std::println(stderr, "-f: requires geometry argument"); std::exit(1); }
-                geom_str = argv[++i];
+                if (i + 1 >= args.size()) { std::println(stderr, "-f: requires geometry argument"); std::exit(1); }
+                geom_str = args[++i];
             } else {
                 geom_str = a.substr(2);  // strip "-f"
             }
@@ -158,15 +201,27 @@ static Options parseArgs(int argc, char** argv) {
                 std::exit(1);
             }
         } else if (a == "-SeamMaskOnly") {
-            if (i + 1 >= argc) { std::println(stderr, "-SeamMaskOnly: requires argument"); std::exit(1); }
-            opts.seam_mask_only = argv[++i];
+            if (i + 1 >= args.size()) { std::println(stderr, "-SeamMaskOnly: requires argument"); std::exit(1); }
+            opts.seam_mask_only = args[++i];
         } else if (a == "-SeamVerbose") {
             opts.seam_verbose = true;
-        } else if (a == "-w" || a == "-v" ||
-                   a == "-PyramidVerbose" || a == "-HorWrap") {
+        } else if (a == "-w" || a == "--wrap" || a.starts_with("--wrap=")) {
+            // enblend wrap; bare -w means horizontal (enblend's default). The
+            // mode word after -w is consumed only if it is a known mode, so an
+            // input filename after a bare -w is not eaten.
+            std::string mode = "horizontal";
+            if (a.starts_with("--wrap="))
+                mode = a.substr(7);
+            else if (i + 1 < args.size() && isWrapMode(args[i + 1]))
+                mode = args[++i];
+            if (mode != "none" && mode != "open")
+                std::println(stderr,
+                             "warning: -w {}: wrap blending not implemented; "
+                             "seams will not cross the canvas edge", mode);
+        } else if (a == "-v" || a == "-PyramidVerbose" || a == "-HorWrap") {
             // accepted, ignored
         } else if (isValueOpt(a)) {
-            if (i + 1 >= argc) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
+            if (i + 1 >= args.size()) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
             std::println(stderr, "warning: {} not implemented, ignoring", a);
             ++i;  // skip value
         } else if (!a.empty() && a[0] == '-') {

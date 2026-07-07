@@ -36,7 +36,11 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 - `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images),
   plus `labelmap_viz.tif` (label map colorized via a golden-angle OkLCh palette)
   and `labelmap_legend.tif` (swatch + input filename key for that palette)
-- `-w`, `-v` accepted and ignored (enblend compat)
+- `@file` — enblend-style response file (one arg per line, `#` comments, CRLF ok,
+  may nest); Hugin uses these on Windows for long command lines
+- `-w [MODE]` / `--wrap[=MODE]` — parsed (mode word never eaten as a filename);
+  wrap blending itself not implemented, warns unless mode is none/open
+- `-v` accepted and ignored (enblend compat)
 - SmartBlend flags (`-DER`, `-DEC`, `-MinSize`, etc.) accepted with warning
 
 ## Pipeline
