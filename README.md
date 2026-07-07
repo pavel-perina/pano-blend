@@ -71,14 +71,29 @@ pano-blend left.tif right.tif -xoff 850 -yoff 0 -o pano.tif
 | `-f WxH+X+Y` | force canvas geometry (enblend-compatible; negative offsets ok) |
 | `-SeamMaskOnly F` | write the label map (0 = uncovered, 1..N = image index) and exit |
 | `-SeamVerbose` | write per-pair debug TIFFs plus a colorized `labelmap_viz.tif` + `labelmap_legend.tif` |
-| `-w`, `-v` | accepted and ignored (enblend compatibility) |
+| `@file` | read arguments from a response file, one per line (Hugin emits these on Windows) |
+| `-w [MODE]`, `--wrap[=MODE]` | parsed for enblend compatibility; wrap blending not implemented (warns unless `none`) |
+| `-v` | accepted and ignored (enblend compatibility) |
+| `--version` | print version and exit |
 
 ### With Hugin
 
 `pano-blend` is a blender, not a stitcher — it needs pre-warped, positioned
-layers, which is exactly what Hugin's `nona` produces. The full workflow
+layers, which is exactly what Hugin's `nona` produces. The full manual workflow
 (`nona -m TIFF_m` → `pano-blend`) is in
 [`doc/hugin-workflow.md`](doc/hugin-workflow.md).
+
+To call it from the Hugin GUI, two settings matter:
+
+1. **Preferences → Programs → enblend** — point the executable at
+   `pano-blend`.
+2. **Stitcher tab → Blender: "enblend" (external)** — with the default
+   *builtin blender*, Hugin uses its internal verdandi and never calls the
+   external program. (Telltale symptom: extra arguments fail with verdandi's
+   getopt-style error, e.g. `-SeamVerbose` → `unknown parameter "-S"`.)
+
+Extra flags such as `-SeamVerbose` go in the enblend arguments field; debug
+TIFFs are written to the stitch's working directory.
 
 ## Status
 
