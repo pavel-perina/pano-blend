@@ -53,3 +53,18 @@ target_include_directories(test_input PRIVATE ${OpenCV_INCLUDE_DIRS} src)
 target_link_libraries(test_input PRIVATE GTest::gtest_main ${OpenCV_LIBS} TIFF::TIFF)
 target_compile_definitions(test_input PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test-data")
 gtest_discover_tests(test_input)
+
+# Synthetic-data unit tests for the blend stage (halo fix, 16-bit labels).
+add_executable(test_blend tests/test_blend.cpp src/blend.cpp)
+target_include_directories(test_blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
+target_link_libraries(test_blend PRIVATE GTest::gtest_main ${OpenCV_LIBS})
+gtest_discover_tests(test_blend)
+
+# End-to-end CLI tests: spawn the real binary (response files, wrap modes).
+add_executable(test_cli tests/test_cli.cpp)
+target_compile_definitions(test_cli PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test-data"
+    PANOBLEND_BIN="$<TARGET_FILE:pano-blend>")
+target_link_libraries(test_cli PRIVATE GTest::gtest_main)
+add_dependencies(test_cli pano-blend)
+gtest_discover_tests(test_cli)

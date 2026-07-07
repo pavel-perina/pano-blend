@@ -75,6 +75,10 @@ src/blend.h  / blend.cpp    — multiBandBlend (N images + label map → CV_8UC4
 src/tiff_io.h / tiff_io.cpp — readTiff (with position tags), writeTiff (libtiff, Deflate)
 src/colors.h / colors.cpp   — OKLab/OKLCh conversions (H in degrees)
 tests/test_input.cpp        — GTest: validates p1.tif / p2.tif pixel values
+tests/test_blend.cpp        — GTest: synthetic in-memory data — halo regression
+                              (transparent wedge), 16-bit labels >255 (20x15 grid)
+tests/test_cli.cpp          — GTest: spawns the binary — --version, @response
+                              files, -w mode parsing (needs PANOBLEND_BIN def)
 tools/tag_tiff.c            — standalone TIFF tag reader/writer
 tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 ```
