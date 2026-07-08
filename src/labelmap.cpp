@@ -98,12 +98,23 @@ cv::Mat accumulate(const std::vector<cv::Mat>& images,
 
     for (size_t k = 1; k < N; ++k) {
         const int idx = order[k];
-        const cv::Rect roi = rects[idx] & canvas_rect;
-        if (roi.empty()) continue;  // entirely off-canvas
+        if ((rects[idx] & canvas_rect).empty()) continue;  // entirely off-canvas
+
+        // Pixel overlap with the mosaic can only occur where the newcomer's
+        // box intersects an already-placed box — union those intersections
+        // and compute the error there only.
+        cv::Rect roi;
+        for (size_t p = 0; p < k; ++p)
+            roi |= (rects[order[p]] & rects[idx]);
+        roi &= canvas_rect;
+        if (roi.empty()) {
+            // Disconnected from everything placed so far: no cut to make,
+            // the newcomer just claims its own coverage.
+            claim(idx, nullptr);
+            continue;
+        }
         std::println("  Seam {}/{}: image {} vs mosaic", k, N - 1, idx);
 
-        // Overlap with the mosaic can only occur inside the newcomer's box;
-        // computeError writes kNoOverlap wherever either side is transparent.
         cv::Mat err(canvas, CV_32FC1, cv::Scalar(seam::kNoOverlap));
         cv::Mat err_roi = err(roi);
         seam::computeError(mosaic(roi), images[idx](roi), err_roi, grayscale);
