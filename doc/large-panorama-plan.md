@@ -1,8 +1,9 @@
 # Large-Panorama / Tiled Blending — Design & Plan
 
-**Status:** design converged in discussion (2026-07); not yet implemented.
-Supersedes the *"all-pairs label map is incoherent"* limitation and the loose
-*"SEM pipeline"* sketch in `CLAUDE.md`.
+**Status:** design converged in discussion (2026-07). **Phase 1 implemented
+2026-07** (`src/labelmap.h/.cpp` + `tests/test_labelmap.cpp`); Phases 0, 2–4
+pending. Supersedes the *"all-pairs label map is incoherent"* limitation and
+the loose *"SEM pipeline"* sketch in `CLAUDE.md`.
 
 ---
 
@@ -105,15 +106,20 @@ raster) and add the center-out heuristic later.
 - [ ] Grayscale + 16-bit load path (SEM): handle `CV_16UC1/2` on load → float
       internally; intensity diff instead of OKLab ΔE for linear, colourless data.
 
-### Phase 1 — Sequential label map (fixes existing 3+-overlap incoherence)
-- [ ] Replace `buildLabelMap`'s all-pairs binary-mask merge with an **ordered
-      sequential accumulate**.
-- [ ] Ordering: pluggable strategy behind an interface. Start with any trivial
-      deterministic order to get the pipeline working; add the Prim max-overlap
-      spanning tree from the center tile (bbox-approx edge weights) as a refinement.
-      **Freeze** whichever order is used (needed for tile consistency). Non-critical.
-- [ ] Record each step's binary cut into the running label map (the "memo").
-- [ ] Verify 3+-overlap coherence on the 5-frame test; diff against current output.
+### Phase 1 — Sequential label map (fixes existing 3+-overlap incoherence) — DONE
+- [x] Replace `buildLabelMap`'s all-pairs binary-mask merge with an **ordered
+      sequential accumulate** (`labelmap::accumulate`, cut against a hard-cut
+      mosaic of placed originals).
+- [x] Ordering: `labelmap::placementOrder` — Prim max-overlap spanning tree from
+      the most central image (bbox-approx edge weights, int64 areas), deterministic,
+      disconnected components restart from the center. Swappable: `accumulate`
+      takes any frozen permutation.
+- [x] Record each step's binary cut into the running label map (the "memo").
+- [x] Verified: two-image output bit-identical to the pairwise implementation
+      (unit test + binary diff on p1/p2 and a 5000×3000 pair); coverage
+      invariants unit-tested at a triple overlap. Bonus: per-pair seam masks no
+      longer stored, originals freed after placement (peak RSS 1814→1478 MB on
+      the big pair).
 
 ### Phase 2 — Global / tiled decoupling
 - [ ] Make Pass-1 seam finding emit a standalone global label map (extend

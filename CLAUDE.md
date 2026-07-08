@@ -34,7 +34,8 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 - `-f WxH+X+Y` — canvas geometry; offsets may be negative (`-12` or `+-12` style)
 - `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit;
   16-bit gray TIFF (CV_16UC1 label map ⇒ up to 65535 images, guarded in main)
-- `-SeamVerbose` — per-pair error/seam/seam_viz TIFFs (numbered for 3+ images),
+- `-SeamVerbose` — per-step error/seam/seam_viz TIFFs (named `_<step>_<image>`
+  for 3+ images; plain `error.tif` etc. for two),
   plus `labelmap_viz.tif` (label map colorized via a golden-angle OkLCh palette)
   and `labelmap_legend.tif` (swatch + input filename key for that palette)
 - `@file` — enblend-style response file (one arg per line, `#` comments, CRLF ok,
@@ -47,10 +48,11 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 ## Pipeline
 | Step | Function | Description |
 |---|---|---|
-| 1 | `seam::computeError` | OKLab ΔE per pixel; computed only inside the pair's overlap rect, row-parallel; rest of canvas = `seam::kNoOverlap` sentinel |
-| 2 | `seam::findSeam` | Coarse-to-fine BK min-cut seam (8× downsample + 64px band refinement); works crop-local on alpha channels only |
-| 3 | `buildLabelMap` | Combine pairwise seams into single label map (0..N) |
-| 4 | `blend::multiBandBlend` | N-image Laplacian pyramid composite via label map; feeds per-image bounding rects, not full canvas |
+| 1 | `labelmap::placementOrder` | Frozen deterministic order: Prim max-overlap spanning tree from the most central image (bbox areas, int64); any permutation is accepted by step 2 |
+| 2 | `labelmap::accumulate` | Sequential accumulate: place first image, then N−1 cuts of each newcomer vs a hard-cut mosaic of placed originals; winners take the newcomer's label, losers keep theirs. Label map (CV_16UC1, 0..N) is the memo of the sequence |
+| 2a | `seam::computeError` | OKLab ΔE per pixel; computed only inside the newcomer's rect, row-parallel; rest of canvas = `seam::kNoOverlap` sentinel |
+| 2b | `seam::findSeam` | Coarse-to-fine BK min-cut seam (8× downsample + 64px band refinement); works crop-local on alpha channels only |
+| 3 | `blend::multiBandBlend` | N-image Laplacian pyramid composite via label map; feeds per-image bounding rects, not full canvas |
 
 ### Seam-finding invariants (learned the hard way)
 - **No pixel overlap ≠ all-zeros mask**: when bounding boxes intersect but opaque
@@ -69,7 +71,9 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 
 ## Key source files
 ```
-src/main.cpp                — CLI parser, overlap detection, label map, pipeline driver
+src/main.cpp                — CLI parser, pipeline driver
+src/labelmap.h / labelmap.cpp — placementOrder (Prim from center), accumulate
+                              (sequential label map; per-step debug callback)
 src/seam.h   / seam.cpp     — computeError, findSeam (coarse-to-fine), visualizeSeam
 src/blend.h  / blend.cpp    — multiBandBlend (N images + label map → CV_8UC4)
 src/tiff_io.h / tiff_io.cpp — readTiff (with position tags), writeTiff (libtiff, Deflate)
@@ -77,6 +81,9 @@ src/colors.h / colors.cpp   — OKLab/OKLCh conversions (H in degrees)
 tests/test_input.cpp        — GTest: validates p1.tif / p2.tif pixel values
 tests/test_blend.cpp        — GTest: synthetic in-memory data — halo regression
                               (transparent wedge), 16-bit labels >255 (20x15 grid)
+tests/test_labelmap.cpp     — GTest: placement order (center root, ties, area
+                              beats index, disconnected), 2-image ≡ pairwise cut,
+                              triple-overlap coverage invariants
 tests/test_cli.cpp          — GTest: spawns the binary — --version, @response
                               files, -w mode parsing (needs PANOBLEND_BIN def)
 tools/tag_tiff.c            — standalone TIFF tag reader/writer
@@ -115,15 +122,17 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 
 ## What's next
 
-### Sequential label map + large-panorama / tiled blend → `doc/large-panorama-plan.md`
-Current bug/limitation: `buildLabelMap` seams **every** bounding-box-overlapping
-pair (N(N-1)/2) and merges independent binary masks — wasteful, and **incoherent at
-3+-image overlaps** (order-dependent, keeps no ΔE, triple points need not meet). Fix
-= a **sequential-accumulate label map** (one frozen order, N-1 cuts; the label map is
-the *memo* of the sequential cuts). That, plus the tiled large-canvas executor
-(apron tiles, global label map, pyramidal BigTIFF, ordering heuristic), is fully
-designed in **`doc/large-panorama-plan.md`**. Phase 1 there also fixes the
-incoherence in the current small-pano path, so it's the first thing to build.
+### Large-panorama / tiled blend → `doc/large-panorama-plan.md`
+**Phase 1 (sequential-accumulate label map) is done** — `labelmap::accumulate`
+does one frozen order (Prim max-overlap from center), N−1 cuts, coherent at
+3+-image overlaps; per-pair seam masks are no longer stored and originals are
+freed after canvas placement. Remaining, in plan order: **Phase 0** crop
+architecture (`placeOnCanvas` still materializes a full-canvas CV_32FC4 per
+image — the dominant memory cost, ~16 B/px/image, plus one mosaic canvas),
+**Phase 2** label-map-as-contract (standalone/downsampled seam pass; a
+`-LoadLabelMap` inverse of `-SeamMaskOnly` would split the passes at the CLI),
+**Phase 3** apron-tiled blend executor, **Phase 4** pyramidal BigTIFF output.
+All designed in **`doc/large-panorama-plan.md`**.
 
 ### Performance (next wins, in order)
 1. **Band-only graph vertices**: fine-pass `graphCut` still allocates a vertex per

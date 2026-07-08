@@ -101,11 +101,12 @@ Verified on single-row strips of 3–5 images (e.g. five 6232×4156 frames → a
 11288×5153 canvas). Grayscale and 16-bit input load; the seam cost currently
 assumes colour (OKLab).
 
-**Known limitation:** seams are found for every overlapping pair and merged by
-image-index priority. Two-image overlaps come out exact, but overlaps of three
-or more images are resolved by an index-ordered cascade rather than a global
-minimum-error partition. The planned fix is SmartBlend's sequential-pairwise
-model — details in [`CLAUDE.md`](CLAUDE.md).
+Seams are found sequentially, SmartBlend-style: images are placed in a
+deterministic maximum-overlap order growing from the panorama's center, and
+each newcomer is graph-cut against the composite of everything placed before
+it — N−1 cuts total, coherent at any number of overlapping images. Very large
+(tiled, out-of-core) panoramas are planned —
+see [`doc/large-panorama-plan.md`](doc/large-panorama-plan.md).
 
 ## Credits & licence
 
