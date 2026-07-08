@@ -155,6 +155,17 @@ raster) and add the center-out heuristic later.
    is low-stakes and never decides a seam).
 3. **Small/large mode switch** — automatic by canvas byte budget, or an explicit flag.
 
+4. **Label-island cleanup — deferred (2026-07).** Where the error quantizes to
+   zero (<1/255) the min-cut is degenerate and BK leaves arbitrary label
+   enclaves ("islands"), typically in flat sky; with JPEG sources the region is
+   additionally speckled with faint quantization-noise anchors. Decision:
+   leave them. They are invisible in output (content identical by definition),
+   don't interact with tiling (the map is frozen globally; apron is
+   label-agnostic), and deflate absorbs the speckle. A boundary-anchored
+   flood-fill post-pass would only merge fully-zero-cost enclaves and would
+   miss the noise-anchored ones anyway. Revisit only if Pass-1 map compression
+   or seam-perimeter cost measurably hurts at gigapixel scale.
+
 ## Non-goals / out of scope
 
 - **De-ghosting / transient removal** (a car that drove through, an accidental
