@@ -34,6 +34,9 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
 - `-f WxH+X+Y` — canvas geometry; offsets may be negative (`-12` or `+-12` style)
 - `-SeamMaskOnly F` — write label map (0=uncovered, 1..N=image index) and exit;
   16-bit gray TIFF (CV_16UC1 label map ⇒ up to 65535 images, guarded in main)
+- `-LoadLabelMap F` — blend from a saved label map, skipping seam finding
+  (the Pass-1/Pass-2 split of doc/large-panorama-plan.md at the CLI; validates
+  canvas size and label range; byte-identical to the direct blend — CLI test)
 - `-SeamVerbose` — per-step error/seam/seam_viz TIFFs (named `_<step>_<image>`
   for 3+ images; plain `error.tif` etc. for two),
   plus `labelmap_viz.tif` (label map colorized via a golden-angle OkLCh palette)
@@ -129,8 +132,8 @@ does one frozen order (Prim max-overlap from center), N−1 cuts, coherent at
 freed after canvas placement. Remaining, in plan order: **Phase 0** crop
 architecture (`placeOnCanvas` still materializes a full-canvas CV_32FC4 per
 image — the dominant memory cost, ~16 B/px/image, plus one mosaic canvas),
-**Phase 2** label-map-as-contract (standalone/downsampled seam pass; a
-`-LoadLabelMap` inverse of `-SeamMaskOnly` would split the passes at the CLI),
+**Phase 2** remainder (`-SeamMaskOnly`/`-LoadLabelMap` already split the passes
+at the CLI; still open: downsampled seam pass for very large canvases),
 **Phase 3** apron-tiled blend executor, **Phase 4** pyramidal BigTIFF output.
 All designed in **`doc/large-panorama-plan.md`**.
 

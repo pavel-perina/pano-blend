@@ -53,6 +53,7 @@ struct Options {
     std::vector<InputArg> inputs;
     std::string           output;
     std::string           seam_mask_only;  // if set, write label map and exit
+    std::string           load_label_map;  // if set, blend from this label map
     bool                  seam_verbose = false;
     CanvasGeometry        canvas_geom;     // -f geometry override (0 = auto)
 };
@@ -65,6 +66,7 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -o / --output    output TIFF");
     std::println(stderr, "  -f WxH+X+Y       force canvas geometry (enblend compat, no space ok)");
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
+    std::println(stderr, "  -LoadLabelMap F  blend using a label map from -SeamMaskOnly (skips seam finding)");
     std::println(stderr, "  -SeamVerbose     write per-step debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
     std::println(stderr, "  @file            read arguments from a response file, one per line");
     std::println(stderr, "  -w [MODE]        wrap mode; accepted, wrap blending not implemented");
@@ -209,6 +211,9 @@ static Options parseArgs(int argc, char** argv) {
         } else if (a == "-SeamMaskOnly") {
             if (i + 1 >= args.size()) { std::println(stderr, "-SeamMaskOnly: requires argument"); std::exit(1); }
             opts.seam_mask_only = args[++i];
+        } else if (a == "-LoadLabelMap") {
+            if (i + 1 >= args.size()) { std::println(stderr, "-LoadLabelMap: requires argument"); std::exit(1); }
+            opts.load_label_map = args[++i];
         } else if (a == "-SeamVerbose") {
             opts.seam_verbose = true;
         } else if (a == "-w" || a == "--wrap" || a.starts_with("--wrap=")) {
@@ -387,36 +392,69 @@ int main(int argc, char** argv) {
     }
     std::println("  place:        {:6} ms", ms() - t0);
 
-    // --- Placement order: Prim max-overlap spanning tree from the center ---
-    const std::vector<int> order = labelmap::placementOrder(rects);
-    {
-        std::string s;
-        for (int idx : order) s += std::format(" {}", idx);
-        std::println("  Placement order:{}", s);
-    }
-
-    // --- Sequential-accumulate label map: N-1 cuts, one frozen order ---
-    t0 = ms();
-    labelmap::StepCallback verbose_cb;
-    if (opts.seam_verbose) {
-        verbose_cb = [&](int step, int idx, const cv::Mat& err,
-                         const cv::Mat& mask, const cv::Mat& mosaic) {
-            const auto tv = ms();
-            std::string ef = "error.tif", sf = "seam.tif", vf = "seam_viz.tif";
-            if (N > 2) {
-                ef = std::format("error_{}_{}.tif", step, idx);
-                sf = std::format("seam_{}_{}.tif", step, idx);
-                vf = std::format("seam_viz_{}_{}.tif", step, idx);
+    cv::Mat label_map;
+    if (!opts.load_label_map.empty()) {
+        // --- Frozen label map from a previous -SeamMaskOnly run ---
+        t0 = ms();
+        try {
+            const tiffio::TiffImage lm = tiffio::readTiff(opts.load_label_map);
+            if (lm.mat.size() != canvas)
+                throw std::runtime_error(std::format(
+                    "label map '{}' is {}x{} but the canvas is {}x{}",
+                    opts.load_label_map, lm.mat.cols, lm.mat.rows,
+                    canvas.width, canvas.height));
+            // readTiff normalizes to CV_32FC4 (gray → R=G=B, /65535); float32
+            // holds 16-bit integers exactly, so rounding recovers the labels.
+            label_map.create(canvas, CV_16UC1);
+            for (int y = 0; y < canvas.height; ++y) {
+                const cv::Vec4f* src = lm.mat.ptr<cv::Vec4f>(y);
+                uint16_t*        lbl = label_map.ptr<uint16_t>(y);
+                for (int x = 0; x < canvas.width; ++x) {
+                    const long v = std::lround(src[x][0] * 65535.0f);
+                    if (v > N)
+                        throw std::runtime_error(std::format(
+                            "label map '{}' has label {} but only {} inputs "
+                            "(expects the 16-bit map written by -SeamMaskOnly)",
+                            opts.load_label_map, v, N));
+                    lbl[x] = static_cast<uint16_t>(v);
+                }
             }
-            tiffio::writeTiff(ef, err);
-            tiffio::writeTiff(sf, mask);
-            tiffio::writeTiff(vf, seam::visualizeSeam(mosaic, canvas_images[idx], err, mask));
-            std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - tv, ef, sf, vf);
-        };
+        } catch (const std::exception& e) {
+            std::println(stderr, "error: {}", e.what());
+            return 1;
+        }
+        std::println("  label map:    {:6} ms  (loaded {})", ms() - t0, opts.load_label_map);
+    } else {
+        // --- Placement order: Prim max-overlap spanning tree from the center ---
+        const std::vector<int> order = labelmap::placementOrder(rects);
+        {
+            std::string s;
+            for (int idx : order) s += std::format(" {}", idx);
+            std::println("  Placement order:{}", s);
+        }
+
+        // --- Sequential-accumulate label map: N-1 cuts, one frozen order ---
+        t0 = ms();
+        labelmap::StepCallback verbose_cb;
+        if (opts.seam_verbose) {
+            verbose_cb = [&](int step, int idx, const cv::Mat& err,
+                             const cv::Mat& mask, const cv::Mat& mosaic) {
+                const auto tv = ms();
+                std::string ef = "error.tif", sf = "seam.tif", vf = "seam_viz.tif";
+                if (N > 2) {
+                    ef = std::format("error_{}_{}.tif", step, idx);
+                    sf = std::format("seam_{}_{}.tif", step, idx);
+                    vf = std::format("seam_viz_{}_{}.tif", step, idx);
+                }
+                tiffio::writeTiff(ef, err);
+                tiffio::writeTiff(sf, mask);
+                tiffio::writeTiff(vf, seam::visualizeSeam(mosaic, canvas_images[idx], err, mask));
+                std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - tv, ef, sf, vf);
+            };
+        }
+        label_map = labelmap::accumulate(canvas_images, rects, order, grayscale, verbose_cb);
+        std::println("  label map:    {:6} ms", ms() - t0);
     }
-    const cv::Mat label_map =
-        labelmap::accumulate(canvas_images, rects, order, grayscale, verbose_cb);
-    std::println("  label map:    {:6} ms", ms() - t0);
 
     if (opts.seam_verbose) {
         t0 = ms();

@@ -85,6 +85,38 @@ TEST(Cli, ResponseFileExpandsWithCommentsAndCrlf) {
     EXPECT_TRUE(fs::exists(mask));
 }
 
+// The Pass-1/Pass-2 split: a blend driven by a saved label map must be
+// byte-identical to the direct single-run blend.
+TEST(Cli, LabelMapRoundTripBlendsIdentically) {
+    const fs::path mask   = tempDir() / "rt_mask.tif";
+    const fs::path direct = tempDir() / "rt_direct.tif";
+    const fs::path viamap = tempDir() / "rt_viamap.tif";
+    for (const auto& p : {mask, direct, viamap}) fs::remove(p);
+
+    ASSERT_TRUE(run(kP1 + " " + kP2 + " -o \"" + direct.string() + "\"").ok);
+    ASSERT_TRUE(run(kP1 + " " + kP2 + " -SeamMaskOnly \"" + mask.string() + "\"").ok);
+    ASSERT_TRUE(run(kP1 + " " + kP2 + " -LoadLabelMap \"" + mask.string() +
+                    "\" -o \"" + viamap.string() + "\"").ok);
+
+    auto slurp = [](const fs::path& p) {
+        std::ifstream f(p, std::ios::binary);
+        return std::string{ std::istreambuf_iterator<char>(f),
+                            std::istreambuf_iterator<char>() };
+    };
+    const std::string a = slurp(direct), b = slurp(viamap);
+    ASSERT_FALSE(a.empty());
+    EXPECT_EQ(a, b);
+}
+
+TEST(Cli, LoadLabelMapRejectsNonLabelImage) {
+    // p1 as a "label map": right size (it is canvas-sized), but its photo
+    // values decode to labels far beyond the input count.
+    const RunResult r = run(kP1 + " " + kP2 + " -LoadLabelMap " + kP1 +
+                            " -o /dev/null");
+    EXPECT_FALSE(r.ok);
+    EXPECT_NE(r.output.find("inputs"), std::string::npos);
+}
+
 TEST(Cli, MissingResponseFileFailsWithClearError) {
     const RunResult r = run("@" + (tempDir() / "no-such-file.txt").string());
     EXPECT_FALSE(r.ok);

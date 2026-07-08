@@ -122,8 +122,8 @@ raster) and add the center-out heuristic later.
       the big pair).
 
 ### Phase 2 — Global / tiled decoupling
-- [ ] Make Pass-1 seam finding emit a standalone global label map (extend
-      `-SeamMaskOnly`); this is the contract to the tiler (label map, not per-pair seams).
+- [x] The label map is a standalone contract at the CLI: `-SeamMaskOnly` writes
+      it, `-LoadLabelMap` blends from it (round-trip byte-identical, CLI-tested).
 - [ ] Optional downsampled seam pass for very large canvases.
 
 ### Phase 3 — Tiled multi-band blend
