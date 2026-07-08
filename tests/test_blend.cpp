@@ -25,9 +25,9 @@ TEST(MultiBandBlend, NoDarkHaloAtTransparentEdge) {
 
     // Label map consistent with coverage: image 2 wins where present and
     // x >= 150, image 1 wins elsewhere it is present.
-    auto in1 = [&](int x, int y) { return r1.contains({x, y}); };
+    auto in1 = [&](int x, int y) { return r1.contains(cv::Point{x, y}); };
     auto in2 = [&](int x, int y) {
-        return r2.contains({x, y}) && !((x - r2.x) + y < 120);
+        return r2.contains(cv::Point{x, y}) && !((x - r2.x) + y < 120);
     };
     cv::Mat label(H, W, CV_16UC1, cv::Scalar(0));
     for (int y = 0; y < H; ++y)

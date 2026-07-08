@@ -1,6 +1,8 @@
-build
+build/
+out/
+.vs/
 .cache
 perf.data*
 CMakeUserPresets.json
 *.bak
-
+.vs/
