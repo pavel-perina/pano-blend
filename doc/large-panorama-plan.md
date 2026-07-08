@@ -100,11 +100,15 @@ raster) and add the center-out heuristic later.
 
 ## Phased TODO
 
-### Phase 0 — Prerequisites (already flagged in CLAUDE.md)
-- [ ] Crop-based architecture: stop materializing a full-canvas `CV_32FC4` per image
-      in `placeOnCanvas`; keep crops + offsets, work in overlap-local coordinates.
-- [ ] Grayscale + 16-bit load path (SEM): handle `CV_16UC1/2` on load → float
-      internally; intensity diff instead of OKLab ΔE for linear, colourless data.
+### Phase 0 — Prerequisites — DONE
+- [x] Crop-based architecture (2026-07): `placeOnCanvas` removed; crops +
+      placement rects flow through `labelmap::accumulate` and
+      `blend::multiBandBlend`. Remaining full-canvas buffers: the mosaic
+      (CV_32FC4, one), the label map (CV_16UC1), and MultiBandBlender's
+      internal destination pyramids — the latter fall to Phase 3.
+- [x] Grayscale + 16-bit load path: `readTiff` loads 8/16-bit gray, gray+alpha,
+      RGB(A) → CV_32FC4 with a grayscale flag; `computeError` uses intensity
+      diff when all inputs are grayscale. (Was already in place.)
 
 ### Phase 1 — Sequential label map (fixes existing 3+-overlap incoherence) — DONE
 - [x] Replace `buildLabelMap`'s all-pairs binary-mask merge with an **ordered

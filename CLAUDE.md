@@ -128,24 +128,22 @@ tools/colorize_mask.py      — OkLrCh palette visualization of label maps
 ## What's next
 
 ### Large-panorama / tiled blend → `doc/large-panorama-plan.md`
-**Phase 1 (sequential-accumulate label map) is done** — `labelmap::accumulate`
-does one frozen order (Prim max-overlap from center), N−1 cuts, coherent at
-3+-image overlaps; per-pair seam masks are no longer stored and originals are
-freed after canvas placement. Remaining, in plan order: **Phase 0** crop
-architecture (`placeOnCanvas` still materializes a full-canvas CV_32FC4 per
-image — the dominant memory cost, ~16 B/px/image, plus one mosaic canvas),
-**Phase 2** remainder (`-SeamMaskOnly`/`-LoadLabelMap` already split the passes
-at the CLI; still open: downsampled seam pass for very large canvases),
-**Phase 3** apron-tiled blend executor, **Phase 4** pyramidal BigTIFF output.
-All designed in **`doc/large-panorama-plan.md`**.
+**Phases 0 and 1 are done.** Phase 1: `labelmap::accumulate` — one frozen
+order (Prim max-overlap from center), N−1 cuts, coherent at 3+-image overlaps,
+no stored per-pair masks. Phase 0: crop architecture — `placeOnCanvas` is
+gone; crops + placement rects flow through accumulate and multiBandBlend, so
+memory is one full-canvas mosaic + Σcrops instead of N×canvas (4×5000×3000
+chain: 4.7→2.2 GB peak). Remaining, in plan order: **Phase 2** remainder
+(`-SeamMaskOnly`/`-LoadLabelMap` already split the passes at the CLI; still
+open: downsampled seam pass for very large canvases), **Phase 3** apron-tiled
+blend executor (also removes MultiBandBlender's full-canvas destination
+pyramids, the remaining big buffer besides the mosaic), **Phase 4** pyramidal
+BigTIFF output. All designed in **`doc/large-panorama-plan.md`**.
 
 ### Performance (next wins, in order)
 1. **Band-only graph vertices**: fine-pass `graphCut` still allocates a vertex per
    crop pixel; an index-remap of band pixels would shrink the BK graph ~10×.
    This is the remaining hotspot (~5 s fine pass on a 1200×3000 dense overlap).
-2. **Crop-based architecture**: `placeOnCanvas` still materializes a full-canvas
-   CV_32FC4 (16 B/px) per image — the memory/scaling blocker for the SEM grid.
-   Keep crops + offsets; do seam work in overlap-local coordinates.
 
 ### SmartBlend parity (not yet implemented)
 1. **Distance error terms (DER/DEC)** — distance-based cost biasing seam toward
