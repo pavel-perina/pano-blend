@@ -59,42 +59,43 @@ std::vector<int> placementOrder(const std::vector<cv::Rect>& rects) {
     return order;
 }
 
-cv::Mat accumulate(const std::vector<cv::Mat>& images,
+cv::Mat accumulate(const std::vector<cv::Mat>& crops,
                    const std::vector<cv::Rect>& rects,
+                   cv::Size canvas,
                    const std::vector<int>& order,
                    bool grayscale,
                    const StepCallback& on_step) {
-    const size_t N = images.size();
+    const size_t N = crops.size();
     CV_Assert(N > 0 && rects.size() == N && order.size() == N);
-    const cv::Size canvas = images[0].size();
+    for (size_t i = 0; i < N; ++i)
+        CV_Assert(crops[i].size() == rects[i].size() && crops[i].type() == CV_32FC4);
     const cv::Rect canvas_rect(0, 0, canvas.width, canvas.height);
 
     cv::Mat label(canvas, CV_16UC1, cv::Scalar(0));
     // Hard-cut composite of original pixels: each pixel holds its current
     // owner's value, so a newcomer is always cut against exactly the content
-    // it will neighbour. One canvas, updated in place — never blended.
+    // it will neighbour. The only full-canvas float buffer — never blended.
     cv::Mat mosaic(canvas, CV_32FC4, cv::Scalar(0, 0, 0, 0));
 
-    // Give idx's opaque pixels to idx where the mask says newcomer (or
-    // unconditionally when mask is null, for the first image).
-    auto claim = [&](int idx, const cv::Mat* mask) {
+    // Give idx's opaque pixels to idx where the view-local mask says
+    // newcomer (or unconditionally when mask is null, for the first image).
+    auto claim = [&](int idx, const cv::Mat* mask, cv::Rect view) {
         const cv::Rect roi = rects[idx] & canvas_rect;
-        const cv::Mat& img = images[idx];
         for (int y = roi.y; y < roi.y + roi.height; ++y) {
-            const cv::Vec4f* src = img.ptr<cv::Vec4f>(y);
-            const uint8_t*   m   = mask ? mask->ptr<uint8_t>(y) : nullptr;
+            const cv::Vec4f* src = crops[idx].ptr<cv::Vec4f>(y - rects[idx].y);
+            const uint8_t*   m   = mask ? mask->ptr<uint8_t>(y - view.y) : nullptr;
             cv::Vec4f*       dst = mosaic.ptr<cv::Vec4f>(y);
             uint16_t*        lbl = label.ptr<uint16_t>(y);
             for (int x = roi.x; x < roi.x + roi.width; ++x) {
-                if (src[x][3] <= 0.5f) continue;
-                if (m && m[x] != 255) continue;
-                dst[x] = src[x];
+                if (src[x - rects[idx].x][3] <= 0.5f) continue;
+                if (m && m[x - view.x] != 255) continue;
+                dst[x] = src[x - rects[idx].x];
                 lbl[x] = static_cast<uint16_t>(idx + 1);
             }
         }
     };
 
-    claim(order[0], nullptr);
+    claim(order[0], nullptr, {});
 
     for (size_t k = 1; k < N; ++k) {
         const int idx = order[k];
@@ -103,25 +104,43 @@ cv::Mat accumulate(const std::vector<cv::Mat>& images,
         // Pixel overlap with the mosaic can only occur where the newcomer's
         // box intersects an already-placed box — union those intersections
         // and compute the error there only.
-        cv::Rect roi;
+        cv::Rect overlap;
         for (size_t p = 0; p < k; ++p)
-            roi |= (rects[order[p]] & rects[idx]);
-        roi &= canvas_rect;
-        if (roi.empty()) {
+            overlap |= (rects[order[p]] & rects[idx]);
+        overlap &= canvas_rect;
+        if (overlap.empty()) {
             // Disconnected from everything placed so far: no cut to make,
             // the newcomer just claims its own coverage.
-            claim(idx, nullptr);
+            claim(idx, nullptr, {});
             continue;
         }
         std::println("  Seam {}/{}: image {} vs mosaic", k, N - 1, idx);
 
-        cv::Mat err(canvas, CV_32FC1, cv::Scalar(seam::kNoOverlap));
-        cv::Mat err_roi = err(roi);
-        seam::computeError(mosaic(roi), images[idx](roi), err_roi, grayscale);
+        // Seam work happens on a view of the canvas: the newcomer's box plus
+        // a kCoarseScale ring so single-image territory survives the coarse
+        // downsample and anchors the cut's hard T-weights.
+        constexpr int m = seam::kCoarseScale;
+        const cv::Rect view = cv::Rect(rects[idx].x - m, rects[idx].y - m,
+                                       rects[idx].width + 2 * m,
+                                       rects[idx].height + 2 * m) & canvas_rect;
 
-        const cv::Mat mask = seam::findSeam(mosaic, images[idx], err);
-        if (on_step) on_step(static_cast<int>(k), idx, err, mask, mosaic);
-        claim(idx, &mask);
+        // Place the newcomer crop into a view-sized image.
+        cv::Mat newcomer(view.size(), CV_32FC4, cv::Scalar(0, 0, 0, 0));
+        const cv::Rect on_canvas = rects[idx] & canvas_rect;
+        crops[idx](cv::Rect(on_canvas.tl() - rects[idx].tl(), on_canvas.size()))
+            .copyTo(newcomer(cv::Rect(on_canvas.tl() - view.tl(), on_canvas.size())));
+
+        cv::Mat err(view.size(), CV_32FC1, cv::Scalar(seam::kNoOverlap));
+        cv::Mat err_roi = err(cv::Rect(overlap.tl() - view.tl(), overlap.size()));
+        seam::computeError(mosaic(overlap),
+                           newcomer(cv::Rect(overlap.tl() - view.tl(), overlap.size())),
+                           err_roi, grayscale);
+
+        const cv::Mat mosaic_view = mosaic(view);
+        const cv::Mat mask = seam::findSeam(mosaic_view, newcomer, err);
+        if (on_step)
+            on_step({static_cast<int>(k), idx, view, err, mask, mosaic_view, newcomer});
+        claim(idx, &mask, view);
     }
     return label;
 }

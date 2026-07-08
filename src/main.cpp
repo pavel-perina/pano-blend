@@ -396,15 +396,16 @@ int main(int argc, char** argv) {
     for (int i = 0; i < N; ++i)
         std::println("  {} at ({},{})", images[i].path, images[i].x, images[i].y);
 
-    std::vector<cv::Mat>  canvas_images(N);
+    // Crops + placement rects, straight from the readers — no full-canvas
+    // per-image buffers (crops are refcounted views of the loaded mats).
+    std::vector<cv::Mat>  crops(N);
     std::vector<cv::Rect> rects(N);
     bool grayscale = true;
     for (int i = 0; i < N; ++i) {
+        crops[i] = images[i].mat;
         rects[i] = cv::Rect(images[i].x, images[i].y,
                             images[i].mat.cols, images[i].mat.rows);
         grayscale = grayscale && images[i].grayscale;
-        canvas_images[i] = tiffio::placeOnCanvas(images[i], canvas);
-        images[i].mat.release();  // original crop no longer needed
     }
     std::println("  place:        {:6} ms", ms() - t0);
 
@@ -453,22 +454,23 @@ int main(int argc, char** argv) {
         t0 = ms();
         labelmap::StepCallback verbose_cb;
         if (opts.seam_verbose) {
-            verbose_cb = [&](int step, int idx, const cv::Mat& err,
-                             const cv::Mat& mask, const cv::Mat& mosaic) {
+            verbose_cb = [&](const labelmap::Step& s) {
                 const auto tv = ms();
                 std::string ef = "error.tif", sf = "seam.tif", vf = "seam_viz.tif";
                 if (N > 2) {
-                    ef = std::format("error_{}_{}.tif", step, idx);
-                    sf = std::format("seam_{}_{}.tif", step, idx);
-                    vf = std::format("seam_viz_{}_{}.tif", step, idx);
+                    ef = std::format("error_{}_{}.tif", s.step, s.image);
+                    sf = std::format("seam_{}_{}.tif", s.step, s.image);
+                    vf = std::format("seam_viz_{}_{}.tif", s.step, s.image);
                 }
-                tiffio::writeTiff(ef, err);
-                tiffio::writeTiff(sf, mask);
-                tiffio::writeTiff(vf, seam::visualizeSeam(mosaic, canvas_images[idx], err, mask));
-                std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - tv, ef, sf, vf);
+                tiffio::writeTiff(ef, s.err);
+                tiffio::writeTiff(sf, s.mask);
+                tiffio::writeTiff(vf, seam::visualizeSeam(s.mosaic, s.newcomer, s.err, s.mask));
+                std::println("    seam verbose: {:6} ms  ({}, {}, {}; view {}x{} at {},{})",
+                             ms() - tv, ef, sf, vf,
+                             s.view.width, s.view.height, s.view.x, s.view.y);
             };
         }
-        label_map = labelmap::accumulate(canvas_images, rects, order, grayscale, verbose_cb);
+        label_map = labelmap::accumulate(crops, rects, canvas, order, grayscale, verbose_cb);
         std::println("  label map:    {:6} ms", ms() - t0);
     }
 
@@ -501,7 +503,7 @@ int main(int argc, char** argv) {
 
     // --- Multi-band blend ---
     t0 = ms();
-    const cv::Mat blended = blend::multiBandBlend(canvas_images, label_map, opts.levels);
+    const cv::Mat blended = blend::multiBandBlend(crops, rects, label_map, opts.levels);
     std::println("  blend:        {:6} ms", ms() - t0);
 
     t0 = ms();

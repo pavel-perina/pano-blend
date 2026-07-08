@@ -32,9 +32,6 @@ TiffImage readTiff(const std::string& path, int xoff = kNoPos, int yoff = kNoPos
 // Compute full canvas dimensions from a set of images.
 cv::Size canvasSize(const std::vector<TiffImage>& images);
 
-// Create a full-canvas transparent image and paste img.mat at (img.x, img.y).
-cv::Mat placeOnCanvas(const TiffImage& img, cv::Size canvas);
-
 // Write a mat to a TIFF file (Deflate compressed with horizontal predictor,
 // alpha-tagged).  Accepts CV_8UC1/3/4 or CV_32FC1/3/4 (auto-converted to 8-bit).
 // compression: 1=fastest … 9=smallest (zlib level; default 1 — the predictor

@@ -58,38 +58,45 @@ static void fillHoles(cv::Mat& bgr, const cv::Mat& present, int band) {
     }
 }
 
-cv::Mat multiBandBlend(const std::vector<cv::Mat>& images,
+cv::Mat multiBandBlend(const std::vector<cv::Mat>& crops,
+                       const std::vector<cv::Rect>& rects,
                        const cv::Mat& label_map, int num_bands) {
-    const int N = static_cast<int>(images.size());
-    const int h = images[0].rows;
-    const int w = images[0].cols;
+    const int N = static_cast<int>(crops.size());
+    CV_Assert(rects.size() == crops.size());
+    const cv::Rect canvas_rect(0, 0, label_map.cols, label_map.rows);
 
     cv::detail::MultiBandBlender blender(/*try_gpu=*/false, num_bands);
-    blender.prepare(cv::Rect(0, 0, w, h));
+    blender.prepare(canvas_rect);
 
     for (int i = 0; i < N; ++i) {
+        // Crop-local view of the part that lies on the canvas.
+        const cv::Rect on_canvas = rects[i] & canvas_rect;
+        if (on_canvas.empty()) continue;
+        const cv::Mat img =
+            crops[i](cv::Rect(on_canvas.tl() - rects[i].tl(), on_canvas.size()));
+
         // Territory mask: 255 where this image (1-based index i+1) wins
         cv::Mat territory;
-        cv::compare(label_map, i + 1, territory, cv::CMP_EQ);
+        cv::compare(label_map(on_canvas), i + 1, territory, cv::CMP_EQ);
 
         // Presence mask: where this image has opaque pixels
         cv::Mat alpha;
-        cv::extractChannel(images[i], alpha, 3);
+        cv::extractChannel(img, alpha, 3);
         cv::Mat present = alpha > 0.5f;
 
         // Final mask: image must be present AND own the territory
         cv::Mat mask;
         cv::bitwise_and(territory, present, mask);
 
-        // Feed only the image's bounding rect — each feed builds a pyramid
-        // over the fed rect, so full-canvas feeds would cost N× canvas.
+        // Feed only the opaque bounding rect — each feed builds a pyramid
+        // over the fed rect, so padded feeds would cost more than needed.
         const cv::Rect roi = cv::boundingRect(present);
         if (roi.empty()) continue;
 
         // Convert float BGRA [0,1] → CV_16SC3 [0,255], filling transparent
         // pixels with the nearest valid colour first (no black-halo bleed).
         cv::Mat bgr, bgr_16s;
-        cv::cvtColor(images[i](roi), bgr, cv::COLOR_BGRA2BGR);
+        cv::cvtColor(img(roi), bgr, cv::COLOR_BGRA2BGR);
         // Pyramid reach ≈ 4·2^num_bands px (radius-2 kernel accumulated across
         // levels; 4× is empirically exact, 2× leaks). 8× = 2× safety margin.
         // int64: 8<<29 overflows int at the CLI's maximum --levels.
@@ -98,7 +105,7 @@ cv::Mat multiBandBlend(const std::vector<cv::Mat>& images,
         fillHoles(bgr, present(roi), reach);
         bgr.convertTo(bgr_16s, CV_16SC3, 255.0);
 
-        blender.feed(bgr_16s, mask(roi), roi.tl());
+        blender.feed(bgr_16s, mask(roi), on_canvas.tl() + roi.tl());
     }
 
     cv::Mat dst_bgr, dst_mask;

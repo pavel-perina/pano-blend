@@ -166,23 +166,6 @@ cv::Size canvasSize(const std::vector<TiffImage>& images) {
     return { w, h };
 }
 
-cv::Mat placeOnCanvas(const TiffImage& img, cv::Size canvas) {
-    cv::Mat result = cv::Mat::zeros(canvas, CV_32FC4);
-
-    // Clip image rect to canvas bounds (handles negative offsets and overhang)
-    const int sx = std::max(0, -img.x);         // source x start (skip if negative offset)
-    const int sy = std::max(0, -img.y);
-    const int dx = std::max(0, img.x);           // dest x start on canvas
-    const int dy = std::max(0, img.y);
-    const int w  = std::min(img.mat.cols - sx, canvas.width  - dx);
-    const int h  = std::min(img.mat.rows - sy, canvas.height - dy);
-
-    if (w > 0 && h > 0) {
-        img.mat(cv::Rect(sx, sy, w, h)).copyTo(result(cv::Rect(dx, dy, w, h)));
-    }
-    return result;
-}
-
 void writeTiff(const std::string& path, const cv::Mat& mat, int compression) {
     // CV_32F [0,1] → 8-bit; CV_8U/CV_16U pass through at their native depth
     // (16-bit is used for label maps with more than 255 images).

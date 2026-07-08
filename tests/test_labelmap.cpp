@@ -94,8 +94,9 @@ TEST(Accumulate, TwoImagesMatchPairwiseCut) {
             else if (in2) expected.at<uint16_t>(y, x) = 2;
         }
 
+    // accumulate takes crops: hand it views of the placed images.
     const cv::Mat label =
-        labelmap::accumulate({img1, img2}, {r1, r2}, {0, 1});
+        labelmap::accumulate({img1(r1), img2(r2)}, {r1, r2}, canvas, {0, 1});
     EXPECT_EQ(cv::countNonZero(label != expected), 0);
 }
 
@@ -106,13 +107,15 @@ TEST(Accumulate, TripleOverlapInvariantsHold) {
     const cv::Size canvas(260, 240);
     const std::vector<cv::Rect> rects = {
         {0, 0, 140, 140}, {100, 0, 140, 140}, {50, 80, 140, 140}};
-    std::vector<cv::Mat> images;
-    for (size_t i = 0; i < rects.size(); ++i)
+    std::vector<cv::Mat> images, crops;
+    for (size_t i = 0; i < rects.size(); ++i) {
         images.push_back(makeImage(canvas, rects[i], 0.4f * static_cast<float>(i)));
+        crops.push_back(images.back()(rects[i]));
+    }
 
     const std::vector<int> order = labelmap::placementOrder(rects);
     ASSERT_TRUE(isPermutation(order, rects.size()));
-    const cv::Mat label = labelmap::accumulate(images, rects, order);
+    const cv::Mat label = labelmap::accumulate(crops, rects, canvas, order);
 
     for (int y = 0; y < canvas.height; ++y)
         for (int x = 0; x < canvas.width; ++x) {

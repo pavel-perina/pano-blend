@@ -234,8 +234,8 @@ cv::Mat findSeam(const cv::Mat& f1, const cv::Mat& f2, const cv::Mat& err) {
         return assembleMask(f1, f2, {}, {});
     }
 
-    constexpr int kScale = 8;       // downsample factor for coarse pass
-    constexpr int kBandRadius = 64; // half-width of refinement band (pixels)
+    constexpr int kScale = kCoarseScale;  // downsample factor for coarse pass
+    constexpr int kBandRadius = 64;       // half-width of refinement band (pixels)
 
     // Expand the crop to include single-image border pixels.  The full-res
     // graph only needs 1, but the coarse pass downsamples the crop by kScale,

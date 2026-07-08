@@ -14,28 +14,31 @@ TEST(MultiBandBlend, NoDarkHaloAtTransparentEdge) {
     const int   W = 400, H = 240;
     const float v = 254.0f / 255.0f;
 
-    cv::Mat img1(H, W, CV_32FC4, cv::Scalar(0, 0, 0, 0));   // white, x < 300
-    img1(cv::Rect(0, 0, 300, H)).setTo(cv::Scalar(v, v, v, 1.0f));
-
-    cv::Mat img2(H, W, CV_32FC4, cv::Scalar(0, 0, 0, 0));   // white, x >= 100,
-    img2(cv::Rect(100, 0, 300, H)).setTo(cv::Scalar(v, v, v, 1.0f));
-    for (int y = 0; y < H; ++y)                              // transparent wedge
-        for (int x = 100; x < W; ++x)
-            if ((x - 100) + y < 120) img2.at<cv::Vec4f>(y, x) = {0, 0, 0, 0};
+    // Crops + placement: img1 covers x < 300, img2 covers x >= 100 with a
+    // transparent wedge at its top-left corner (canvas coordinates).
+    const cv::Rect r1(0, 0, 300, H), r2(100, 0, 300, H);
+    cv::Mat img1(r1.size(), CV_32FC4, cv::Scalar(v, v, v, 1.0f));
+    cv::Mat img2(r2.size(), CV_32FC4, cv::Scalar(v, v, v, 1.0f));
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < r2.width; ++x)
+            if (x + y < 120) img2.at<cv::Vec4f>(y, x) = {0, 0, 0, 0};
 
     // Label map consistent with coverage: image 2 wins where present and
     // x >= 150, image 1 wins elsewhere it is present.
+    auto in1 = [&](int x, int y) { return r1.contains({x, y}); };
+    auto in2 = [&](int x, int y) {
+        return r2.contains({x, y}) && !((x - r2.x) + y < 120);
+    };
     cv::Mat label(H, W, CV_16UC1, cv::Scalar(0));
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
-            const bool in1 = img1.at<cv::Vec4f>(y, x)[3] > 0.5f;
-            const bool in2 = img2.at<cv::Vec4f>(y, x)[3] > 0.5f;
-            if (in2 && (x >= 150 || !in1)) label.at<uint16_t>(y, x) = 2;
-            else if (in1)                  label.at<uint16_t>(y, x) = 1;
+            if (in2(x, y) && (x >= 150 || !in1(x, y))) label.at<uint16_t>(y, x) = 2;
+            else if (in1(x, y))                        label.at<uint16_t>(y, x) = 1;
         }
 
-    const cv::Mat out = blend::multiBandBlend({img1, img2}, label);
+    const cv::Mat out = blend::multiBandBlend({img1, img2}, {r1, r2}, label);
     ASSERT_EQ(out.type(), CV_8UC4);
+    ASSERT_EQ(out.size(), label.size());
 
     int min_opaque = 255, dark = 0;
     for (int y = 0; y < H; ++y)
@@ -52,7 +55,7 @@ TEST(MultiBandBlend, NoDarkHaloAtTransparentEdge) {
 
 // 16-bit label-map regression: with a uint8 label map, image index 256+
 // wrapped (label 257 -> 1) and its territory silently vanished from the
-// composite. A 20x15 grid of tile images exercises labels beyond 255; the
+// composite. A 20x15 grid of tile crops exercises labels beyond 255; the
 // probed tile is interior, so pyramid weight support is complete and its
 // colour survives intact.
 TEST(MultiBandBlend, LabelsAbove255Survive) {
@@ -60,16 +63,16 @@ TEST(MultiBandBlend, LabelsAbove255Survive) {
     const int W = cols * tile, H = rows * tile;
     const float v = 200.0f / 255.0f;
 
-    std::vector<cv::Mat> images(cols * rows);
+    std::vector<cv::Mat>  crops(cols * rows);
+    std::vector<cv::Rect> rects(cols * rows);
     cv::Mat label(H, W, CV_16UC1, cv::Scalar(0));
     for (int i = 0; i < cols * rows; ++i) {
-        const cv::Rect r((i % cols) * tile, (i / cols) * tile, tile, tile);
-        images[i] = cv::Mat(H, W, CV_32FC4, cv::Scalar(0, 0, 0, 0));
-        images[i](r).setTo(cv::Scalar(v, v, v, 1.0f));
-        label(r).setTo(cv::Scalar(i + 1));
+        rects[i] = cv::Rect((i % cols) * tile, (i / cols) * tile, tile, tile);
+        crops[i] = cv::Mat(tile, tile, CV_32FC4, cv::Scalar(v, v, v, 1.0f));
+        label(rects[i]).setTo(cv::Scalar(i + 1));
     }
 
-    const cv::Mat out = blend::multiBandBlend(images, label);
+    const cv::Mat out = blend::multiBandBlend(crops, rects, label);
     ASSERT_EQ(out.type(), CV_8UC4);
 
     // image index 256 (label 257) is the first one a uint8 map lost;

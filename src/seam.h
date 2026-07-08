@@ -8,6 +8,13 @@ namespace seam {
 // OKLab distance, safe for downstream squaring in n-weight computation.
 inline constexpr float kNoOverlap = 1e6f;
 
+// Downsample factor of findSeam's coarse pass. Callers handing findSeam a
+// view instead of the whole canvas must include at least this margin of
+// single-image territory around the possible overlap: the coarse pass
+// shrinks the crop by this factor, and a thinner border ring vanishes there,
+// losing the hard T-weights that anchor the cut.
+inline constexpr int kCoarseScale = 8;
+
 // Per-pixel distance between two float BGRA images (CV_32FC4).
 // Color images: OKLab perceptual distance. Grayscale: absolute intensity diff.
 // Pixels not covered by both images are filled with kNoOverlap.

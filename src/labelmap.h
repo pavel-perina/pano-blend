@@ -15,22 +15,32 @@ namespace labelmap {
 // image. bbox area is only the ordering weight — never a seam decision.
 std::vector<int> placementOrder(const std::vector<cv::Rect>& rects);
 
-// Called once per cut, before it is applied. step is 1..N-1, image the index
-// being placed, mask the seam (0 = accumulated mosaic side, 255 = newcomer),
-// mosaic the hard-cut composite the newcomer was cut against.
-using StepCallback = std::function<void(int step, int image, const cv::Mat& err,
-                                        const cv::Mat& mask, const cv::Mat& mosaic)>;
+// One accumulate step, handed to the callback before the cut is applied.
+// All mats are view-local; |view| places them on the canvas.
+struct Step {
+    int step;               // 1..N-1
+    int image;              // index of the image being placed
+    cv::Rect view;          // canvas rect the mats below correspond to
+    const cv::Mat& err;     // CV_32FC1 error (kNoOverlap outside the overlap)
+    const cv::Mat& mask;    // CV_8UC1 cut: 0 = mosaic side, 255 = newcomer
+    const cv::Mat& mosaic;  // CV_32FC4 composite the newcomer was cut against
+    const cv::Mat& newcomer;// CV_32FC4 the placed newcomer
+};
+using StepCallback = std::function<void(const Step&)>;
 
-// Sequential-accumulate label map: place images[order[0]], then graph-cut each
-// images[order[k]] against the accumulated coverage of the previously placed
+// Sequential-accumulate label map: place crops[order[0]], then graph-cut each
+// crops[order[k]] against the accumulated coverage of the previously placed
 // images — N-1 cuts. The returned label map (CV_16UC1; 0 = uncovered,
 // 1..N = image index) is the memo of that sequence: cut winners take the
 // newcomer's label, losers keep theirs.
-// images: canvas-sized CV_32FC4; rects: each image's bounding box in canvas
-// coordinates (may extend past the canvas; used to restrict per-step work).
-// order: a permutation of 0..N-1, e.g. from placementOrder().
-cv::Mat accumulate(const std::vector<cv::Mat>& images,
+// crops: CV_32FC4 image crops; rects: each crop's placement in canvas
+// coordinates (rects[i].size() == crops[i].size(); may extend past the
+// canvas). order: a permutation of 0..N-1, e.g. from placementOrder().
+// Working memory is one full-canvas CV_32FC4 mosaic plus the label map;
+// per-step buffers are view-sized (newcomer rect + margin).
+cv::Mat accumulate(const std::vector<cv::Mat>& crops,
                    const std::vector<cv::Rect>& rects,
+                   cv::Size canvas,
                    const std::vector<int>& order,
                    bool grayscale = false,
                    const StepCallback& on_step = nullptr);
