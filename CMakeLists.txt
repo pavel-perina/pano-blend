@@ -8,7 +8,8 @@ find_package(OpenCV 4 REQUIRED
     COMPONENTS core imgproc imgcodecs stitching)
 find_package(TIFF REQUIRED)
 
-set(PANOBLEND_SOURCES src/main.cpp src/colors.cpp src/seam.cpp src/blend.cpp src/tiff_io.cpp)
+set(PANOBLEND_SOURCES src/main.cpp src/colors.cpp src/seam.cpp src/labelmap.cpp
+    src/blend.cpp src/tiff_io.cpp)
 
 # Version comes solely from `git describe` ("unknown" fallback), regenerated on
 # every build by cmake/GenerateVersion.cmake so incremental builds never embed
@@ -59,6 +60,13 @@ add_executable(test_blend tests/test_blend.cpp src/blend.cpp)
 target_include_directories(test_blend PRIVATE ${OpenCV_INCLUDE_DIRS} src)
 target_link_libraries(test_blend PRIVATE GTest::gtest_main ${OpenCV_LIBS})
 gtest_discover_tests(test_blend)
+
+# Sequential label-map tests: placement order, pairwise equivalence, invariants.
+add_executable(test_labelmap tests/test_labelmap.cpp
+               src/labelmap.cpp src/seam.cpp src/colors.cpp)
+target_include_directories(test_labelmap PRIVATE ${OpenCV_INCLUDE_DIRS} src)
+target_link_libraries(test_labelmap PRIVATE GTest::gtest_main ${OpenCV_LIBS})
+gtest_discover_tests(test_labelmap)
 
 # End-to-end CLI tests: spawn the real binary (response files, wrap modes).
 add_executable(test_cli tests/test_cli.cpp)

@@ -19,6 +19,7 @@ static long long ms() {
 
 #include "blend.h"
 #include "colors.h"
+#include "labelmap.h"
 #include "seam.h"
 #include "tiff_io.h"
 
@@ -64,7 +65,7 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -o / --output    output TIFF");
     std::println(stderr, "  -f WxH+X+Y       force canvas geometry (enblend compat, no space ok)");
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
-    std::println(stderr, "  -SeamVerbose     write per-pair debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
+    std::println(stderr, "  -SeamVerbose     write per-step debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
     std::println(stderr, "  @file            read arguments from a response file, one per line");
     std::println(stderr, "  -w [MODE]        wrap mode; accepted, wrap blending not implemented");
     std::println(stderr, "  -v               accepted and ignored (enblend compat)");
@@ -243,80 +244,6 @@ static Options parseArgs(int argc, char** argv) {
     return opts;
 }
 
-// ---------------------------------------------------------------------------
-// Overlap detection
-// ---------------------------------------------------------------------------
-
-struct OverlapPair {
-    int i, j;           // image indices
-    cv::Rect overlap;   // bounding box in canvas coordinates
-};
-
-// Find all pairs of images whose bounding boxes overlap.
-static std::vector<OverlapPair> findOverlaps(const std::vector<tiffio::TiffImage>& images) {
-    std::vector<OverlapPair> pairs;
-    const int N = static_cast<int>(images.size());
-    for (int i = 0; i < N; ++i) {
-        cv::Rect ri(images[i].x, images[i].y, images[i].mat.cols, images[i].mat.rows);
-        for (int j = i + 1; j < N; ++j) {
-            cv::Rect rj(images[j].x, images[j].y, images[j].mat.cols, images[j].mat.rows);
-            cv::Rect inter = ri & rj;
-            if (inter.area() > 0) {
-                pairs.push_back({i, j, inter});
-            }
-        }
-    }
-    return pairs;
-}
-
-// ---------------------------------------------------------------------------
-// Label map construction from pairwise seams
-// ---------------------------------------------------------------------------
-
-// Build a label map (0=no image, 1..N=image index) from pairwise seam masks.
-// Uses sequential priority: later pairs override earlier assignments.
-static cv::Mat buildLabelMap(const std::vector<cv::Mat>& canvas_images,
-                             const std::vector<OverlapPair>& pairs,
-                             const std::vector<cv::Mat>& seam_masks,
-                             cv::Size canvas) {
-    const int N = static_cast<int>(canvas_images.size());
-
-    // Initialize: assign each pixel to the first image that covers it.
-    // 16-bit labels: up to 65535 images (uint8 wrapped at 256+ and silently
-    // dropped those images' territory).
-    cv::Mat label(canvas, CV_16UC1, cv::Scalar(0));
-    for (int i = 0; i < N; ++i) {
-        for (int y = 0; y < canvas.height; ++y) {
-            const cv::Vec4f* row = canvas_images[i].ptr<cv::Vec4f>(y);
-            uint16_t*        lbl = label.ptr<uint16_t>(y);
-            for (int x = 0; x < canvas.width; ++x) {
-                if (row[x][3] > 0.5f && lbl[x] == 0)
-                    lbl[x] = static_cast<uint16_t>(i + 1);
-            }
-        }
-    }
-
-    // Apply pairwise seams: each seam overrides the label in overlap regions
-    for (size_t p = 0; p < pairs.size(); ++p) {
-        const auto& pair = pairs[p];
-        const cv::Mat& mask = seam_masks[p];  // 0=image i, 255=image j
-        const int img_i = pair.i + 1;  // 1-based label
-        const int img_j = pair.j + 1;
-
-        for (int y = 0; y < canvas.height; ++y) {
-            const uint8_t* rm  = mask.ptr<uint8_t>(y);
-            uint16_t*      lbl = label.ptr<uint16_t>(y);
-            for (int x = 0; x < canvas.width; ++x) {
-                // Only modify pixels that belong to one of the two images in this pair
-                if (lbl[x] != img_i && lbl[x] != img_j) continue;
-                lbl[x] = static_cast<uint16_t>((rm[x] == 0) ? img_i : img_j);
-            }
-        }
-    }
-
-    return label;
-}
-
 // Distinct BGRA colour per label index: label 0 → transparent; labels 1..N get
 // golden-angle hues in OkLCh at fixed L/C. Not pixel-identical to
 // tools/colorize_mask.py (which uses the toe-corrected OkLrCh via coloraide) —
@@ -334,8 +261,8 @@ static std::vector<cv::Vec4b> labelPalette(int N) {
 }
 
 // Map a label map (0=uncovered, 1..N=image index) to a BGRA image via the
-// palette. buildLabelMap only writes labels 0..N and the palette is sized
-// N+1, so the lookup needs no range check.
+// palette. labelmap::accumulate only writes labels 0..N and the palette is
+// sized N+1, so the lookup needs no range check.
 static cv::Mat colorizeLabelMap(const cv::Mat& label, const std::vector<cv::Vec4b>& palette) {
     cv::Mat out(label.size(), CV_8UC4);
     for (int y = 0; y < label.rows; ++y) {
@@ -448,72 +375,47 @@ int main(int argc, char** argv) {
     for (int i = 0; i < N; ++i)
         std::println("  {} at ({},{})", images[i].path, images[i].x, images[i].y);
 
-    std::vector<cv::Mat> canvas_images(N);
-    for (int i = 0; i < N; ++i)
+    std::vector<cv::Mat>  canvas_images(N);
+    std::vector<cv::Rect> rects(N);
+    bool grayscale = true;
+    for (int i = 0; i < N; ++i) {
+        rects[i] = cv::Rect(images[i].x, images[i].y,
+                            images[i].mat.cols, images[i].mat.rows);
+        grayscale = grayscale && images[i].grayscale;
         canvas_images[i] = tiffio::placeOnCanvas(images[i], canvas);
+        images[i].mat.release();  // original crop no longer needed
+    }
     std::println("  place:        {:6} ms", ms() - t0);
 
-    // --- Find overlapping pairs ---
-    const auto pairs = findOverlaps(images);
-    std::println("  Overlapping pairs: {}", pairs.size());
-    for (const auto& p : pairs)
-        std::println("    images {}-{}: overlap {}x{} at ({},{})",
-                     p.i, p.j, p.overlap.width, p.overlap.height,
-                     p.overlap.x, p.overlap.y);
-
-    if (pairs.empty()) {
-        std::println(stderr, "warning: no overlapping image pairs found");
+    // --- Placement order: Prim max-overlap spanning tree from the center ---
+    const std::vector<int> order = labelmap::placementOrder(rects);
+    {
+        std::string s;
+        for (int idx : order) s += std::format(" {}", idx);
+        std::println("  Placement order:{}", s);
     }
 
-    // --- Pairwise seam finding ---
-    std::vector<cv::Mat> seam_masks(pairs.size());
-    for (size_t p = 0; p < pairs.size(); ++p) {
-        const auto& pair = pairs[p];
-        std::println("  Seam {}-{}:", pair.i, pair.j);
-
-        t0 = ms();
-        const bool gray = images[pair.i].grayscale && images[pair.j].grayscale;
-        // Pixel overlap can only occur inside the bounding-box intersection,
-        // so fill with the sentinel and compute the error there only.
-        cv::Mat err(canvas, CV_32FC1, cv::Scalar(seam::kNoOverlap));
-        const cv::Rect roi = pair.overlap & cv::Rect(0, 0, canvas.width, canvas.height);
-        if (!roi.empty()) {
-            cv::Mat err_roi = err(roi);
-            seam::computeError(canvas_images[pair.i](roi), canvas_images[pair.j](roi),
-                               err_roi, gray);
-        }
-        std::println("    computeError: {:6} ms{}", ms() - t0, gray ? "  (grayscale)" : "");
-
-        t0 = ms();
-        seam_masks[p] = seam::findSeam(canvas_images[pair.i], canvas_images[pair.j], err);
-        std::println("    findSeam:     {:6} ms", ms() - t0);
-
-        if (opts.seam_verbose) {
-            t0 = ms();
-            if (pairs.size() == 1) {
-                tiffio::writeTiff("error.tif",    err);
-                tiffio::writeTiff("seam.tif",     seam_masks[p]);
-                const cv::Mat viz = seam::visualizeSeam(canvas_images[pair.i], canvas_images[pair.j],
-                                                        err, seam_masks[p]);
-                tiffio::writeTiff("seam_viz.tif", viz);
-                std::println("    seam verbose: {:6} ms  (error.tif, seam.tif, seam_viz.tif)", ms() - t0);
-            } else {
-                auto ef = std::format("error_{}_{}.tif", pair.i, pair.j);
-                auto sf = std::format("seam_{}_{}.tif", pair.i, pair.j);
-                auto vf = std::format("seam_viz_{}_{}.tif", pair.i, pair.j);
-                tiffio::writeTiff(ef, err);
-                tiffio::writeTiff(sf, seam_masks[p]);
-                const cv::Mat viz = seam::visualizeSeam(canvas_images[pair.i], canvas_images[pair.j],
-                                                        err, seam_masks[p]);
-                tiffio::writeTiff(vf, viz);
-                std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - t0, ef, sf, vf);
-            }
-        }
-    }
-
-    // --- Build label map ---
+    // --- Sequential-accumulate label map: N-1 cuts, one frozen order ---
     t0 = ms();
-    const cv::Mat label_map = buildLabelMap(canvas_images, pairs, seam_masks, canvas);
+    labelmap::StepCallback verbose_cb;
+    if (opts.seam_verbose) {
+        verbose_cb = [&](int step, int idx, const cv::Mat& err,
+                         const cv::Mat& mask, const cv::Mat& mosaic) {
+            const auto tv = ms();
+            std::string ef = "error.tif", sf = "seam.tif", vf = "seam_viz.tif";
+            if (N > 2) {
+                ef = std::format("error_{}_{}.tif", step, idx);
+                sf = std::format("seam_{}_{}.tif", step, idx);
+                vf = std::format("seam_viz_{}_{}.tif", step, idx);
+            }
+            tiffio::writeTiff(ef, err);
+            tiffio::writeTiff(sf, mask);
+            tiffio::writeTiff(vf, seam::visualizeSeam(mosaic, canvas_images[idx], err, mask));
+            std::println("    seam verbose: {:6} ms  ({}, {}, {})", ms() - tv, ef, sf, vf);
+        };
+    }
+    const cv::Mat label_map =
+        labelmap::accumulate(canvas_images, rects, order, grayscale, verbose_cb);
     std::println("  label map:    {:6} ms", ms() - t0);
 
     if (opts.seam_verbose) {
