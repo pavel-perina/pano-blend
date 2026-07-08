@@ -3,6 +3,9 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/stitching/detail/blenders.hpp>
 
+#include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <vector>
 
 namespace blend {
@@ -89,7 +92,10 @@ cv::Mat multiBandBlend(const std::vector<cv::Mat>& images,
         cv::cvtColor(images[i](roi), bgr, cv::COLOR_BGRA2BGR);
         // Pyramid reach ≈ 4·2^num_bands px (radius-2 kernel accumulated across
         // levels; 4× is empirically exact, 2× leaks). 8× = 2× safety margin.
-        fillHoles(bgr, present(roi), 8 << num_bands);
+        // int64: 8<<29 overflows int at the CLI's maximum --levels.
+        const int reach = static_cast<int>(
+            std::min<int64_t>(int64_t{8} << num_bands, INT_MAX));
+        fillHoles(bgr, present(roi), reach);
         bgr.convertTo(bgr_16s, CV_16SC3, 255.0);
 
         blender.feed(bgr_16s, mask(roi), roi.tl());

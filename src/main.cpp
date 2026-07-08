@@ -55,6 +55,7 @@ struct Options {
     std::string           seam_mask_only;  // if set, write label map and exit
     std::string           load_label_map;  // if set, blend from this label map
     bool                  seam_verbose = false;
+    int                   levels = 5;      // pyramid blend levels (-l/--levels)
     CanvasGeometry        canvas_geom;     // -f geometry override (0 = auto)
 };
 
@@ -68,6 +69,7 @@ static void usage(const char* argv0) {
     std::println(stderr, "  -SeamMaskOnly F  write label map to F and exit (no blending)");
     std::println(stderr, "  -LoadLabelMap F  blend using a label map from -SeamMaskOnly (skips seam finding)");
     std::println(stderr, "  -SeamVerbose     write per-step debug TIFFs (error/seam/seam_viz) + labelmap_viz/legend");
+    std::println(stderr, "  -l N / --levels N  pyramid blend levels, 1-29 (default 5; enblend compat)");
     std::println(stderr, "  @file            read arguments from a response file, one per line");
     std::println(stderr, "  -w [MODE]        wrap mode; accepted, wrap blending not implemented");
     std::println(stderr, "  -v               accepted and ignored (enblend compat)");
@@ -216,6 +218,20 @@ static Options parseArgs(int argc, char** argv) {
             opts.load_label_map = args[++i];
         } else if (a == "-SeamVerbose") {
             opts.seam_verbose = true;
+        } else if (a == "-l" || a == "--levels" || a.starts_with("--levels=")) {
+            // enblend: number of pyramid blend levels.
+            std::string val;
+            if (a.starts_with("--levels=")) {
+                val = a.substr(9);
+            } else {
+                if (i + 1 >= args.size()) { std::println(stderr, "{}: requires argument", a); std::exit(1); }
+                val = args[++i];
+            }
+            opts.levels = parseInt("--levels", val);
+            if (opts.levels < 1 || opts.levels > 29) {
+                std::println(stderr, "error: --levels: expected 1..29, got {}", opts.levels);
+                std::exit(1);
+            }
         } else if (a == "-w" || a == "--wrap" || a.starts_with("--wrap=")) {
             // enblend wrap; bare -w means horizontal (enblend's default). The
             // mode word after -w is consumed only if it is a known mode, so an
@@ -485,7 +501,7 @@ int main(int argc, char** argv) {
 
     // --- Multi-band blend ---
     t0 = ms();
-    const cv::Mat blended = blend::multiBandBlend(canvas_images, label_map);
+    const cv::Mat blended = blend::multiBandBlend(canvas_images, label_map, opts.levels);
     std::println("  blend:        {:6} ms", ms() - t0);
 
     t0 = ms();

@@ -71,7 +71,8 @@ pano-blend left.tif right.tif -xoff 850 -yoff 0 -o pano.tif
 | `-f WxH+X+Y` | force canvas geometry (enblend-compatible; negative offsets ok) |
 | `-SeamMaskOnly F` | write the label map (0 = uncovered, 1..N = image index) and exit |
 | `-LoadLabelMap F` | blend using a label map from `-SeamMaskOnly` (skips seam finding) |
-| `-SeamVerbose` | write per-pair debug TIFFs plus a colorized `labelmap_viz.tif` + `labelmap_legend.tif` |
+| `-SeamVerbose` | write per-step debug TIFFs plus a colorized `labelmap_viz.tif` + `labelmap_legend.tif` |
+| `-l N`, `--levels N` | pyramid blend levels, 1–29 (default 5; enblend-compatible) |
 | `@file` | read arguments from a response file, one per line (Hugin emits these on Windows) |
 | `-w [MODE]`, `--wrap[=MODE]` | parsed for enblend compatibility; wrap blending not implemented (warns unless `none`) |
 | `-v` | accepted and ignored (enblend compatibility) |

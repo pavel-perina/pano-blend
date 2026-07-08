@@ -43,6 +43,8 @@ pano-blend img1.tif img2.tif -o out.tif -SeamVerbose   # debug TIFFs
   and `labelmap_legend.tif` (swatch + input filename key for that palette)
 - `@file` — enblend-style response file (one arg per line, `#` comments, CRLF ok,
   may nest); Hugin uses these on Windows for long command lines
+- `-l N` / `--levels[=]N` — pyramid blend levels, validated 1..29 (default 5);
+  fillHoles reach `8<<levels` is int64-clamped in blend.cpp for large N
 - `-w [MODE]` / `--wrap[=MODE]` — parsed (mode word never eaten as a filename);
   wrap blending itself not implemented, warns unless mode is none/open
 - `-v` accepted and ignored (enblend compat)

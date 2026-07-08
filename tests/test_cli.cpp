@@ -117,6 +117,31 @@ TEST(Cli, LoadLabelMapRejectsNonLabelImage) {
     EXPECT_NE(r.output.find("inputs"), std::string::npos);
 }
 
+// --levels must actually reach the blender: a 1-level pyramid feathers the
+// seam far narrower than the 5-level default, so the outputs must differ.
+TEST(Cli, LevelsFlagChangesTheBlend) {
+    const fs::path deflt = tempDir() / "lv_default.tif";
+    const fs::path one   = tempDir() / "lv_one.tif";
+    ASSERT_TRUE(run(kP1 + " " + kP2 + " -o \"" + deflt.string() + "\"").ok);
+    ASSERT_TRUE(run(kP1 + " " + kP2 + " --levels=1 -o \"" + one.string() + "\"").ok);
+
+    auto slurp = [](const fs::path& p) {
+        std::ifstream f(p, std::ios::binary);
+        return std::string{ std::istreambuf_iterator<char>(f),
+                            std::istreambuf_iterator<char>() };
+    };
+    const std::string a = slurp(deflt), b = slurp(one);
+    ASSERT_FALSE(a.empty());
+    ASSERT_FALSE(b.empty());
+    EXPECT_NE(a, b);
+}
+
+TEST(Cli, LevelsFlagValidatesRange) {
+    const RunResult r = run(kP1 + " " + kP2 + " -l 0 -o /dev/null");
+    EXPECT_FALSE(r.ok);
+    EXPECT_NE(r.output.find("expected 1..29"), std::string::npos);
+}
+
 TEST(Cli, MissingResponseFileFailsWithClearError) {
     const RunResult r = run("@" + (tempDir() / "no-such-file.txt").string());
     EXPECT_FALSE(r.ok);
